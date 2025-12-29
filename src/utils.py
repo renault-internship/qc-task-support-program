@@ -127,3 +127,25 @@ def guess_last_data_row(ws, data_start_row: int, anchor_col: int, empty_run: int
             streak = 0
     return max(last, data_start_row)
 
+from pathlib import Path
+from openpyxl import load_workbook
+from openpyxl.workbook.workbook import Workbook
+
+
+class AppError(Exception):
+    """UI에서 사용자에게 메시지로 보여줄 목적의 예외"""
+    pass
+
+
+def load_workbook_safe(path: Path) -> Workbook:
+    try:
+        return load_workbook(path, data_only=False)
+    except Exception as e:
+        raise AppError(f"엑셀 로드 실패: {path}\n{e}") from e
+
+
+def save_workbook_safe(wb: Workbook, path: Path) -> None:
+    try:
+        wb.save(path)
+    except Exception as e:
+        raise AppError(f"엑셀 저장 실패: {path}\n{e}") from e

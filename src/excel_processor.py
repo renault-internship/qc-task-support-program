@@ -185,3 +185,65 @@ def process_all(in_path: str, out_path: str, company_info: Dict[str, Any]):
 
     wb.save(out_path)
 
+
+from openpyxl.workbook.workbook import Workbook
+from src.utils import AppError
+
+def process_wb_inplace(wb: Workbook, company_info: dict):
+    sheet_index = company_info.get("sheet_index", 0)
+    header_row = company_info.get("header_row", 3)
+    data_start_row = company_info.get("data_start_row", 4)
+    mileage_threshold = company_info.get("mileage_threshold", 50000)
+    warranty_years = company_info.get("warranty_years", 2)
+
+    ws = wb.worksheets[sheet_index]
+
+    vehicle_col = find_col_by_keywords_ws(ws, header_row, ["vehicle", "차계"], mode="any")
+    occ_col     = find_col_by_keywords_ws(ws, header_row, ["total cost", "발생", "발생금액"], mode="any")
+    chb_col     = find_col_by_keywords_ws(ws, header_row, ["chargeback", "구상", "구상금액"], mode="any")
+    repair_col  = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자", "repair"], mode="any")
+
+    last_row = guess_last_data_row(ws, data_start_row, anchor_col=repair_col, empty_run=30)
+
+    unmerge_and_fill_column(ws, vehicle_col, data_start_row, last_row)
+
+    changed_rows: set[int] = set()
+
+    rate_col = apply_warranty_filters_ws(
+        ws=ws,
+        header_row=header_row,
+        data_start_row=data_start_row,
+        last_row=last_row,
+        changed_rows=changed_rows,
+        mileage_threshold=mileage_threshold,
+        warranty_years=warranty_years,
+    )
+
+    set_chargeback_formula_rows(ws, changed_rows, occ_col, rate_col, chb_col)
+
+    add_sum_rows(ws, data_start_row, last_row, occ_col, chb_col)
+
+    subtotal_row = header_row - 1
+    v = ws.cell(row=subtotal_row, column=chb_col).value
+    if v is None or str(v).strip() == "":
+        set_subtotal(ws, chb_col, data_start_row, last_row, subtotal_row, use_109=True)
+
+
+def preprocess_inplace(wb: Workbook, company: str, keyword: str) -> None:
+    """
+    UI 전처리 버튼 엔트리.
+    - 기존 전처리 로직을 'wb in-place'로 실행한다.
+    """
+    try:
+        # 회사별 rule 분기는 나중에 여기서 처리
+        company_info = {
+            "sheet_index": 0,
+            "header_row": 3,
+            "data_start_row": 4,
+            "mileage_threshold": 50000,
+            "warranty_years": 2,
+        }
+        process_wb_inplace(wb, company_info)
+
+    except Exception as e:
+        raise AppError(f"전처리 처리 중 오류: {e}") from e
