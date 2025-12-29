@@ -1,29 +1,39 @@
-"""
-GUI 컴포넌트 모듈
-"""
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 from datetime import datetime
 
 from PySide6.QtCore import Qt
-# Import 부분 (11-16줄)
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox,
-    QDialog, QLineEdit, QFormLayout, QSpinBox, QGroupBox  # 모두 포함
+    QWidget, QHBoxLayout, QVBoxLayout, QTableView,
+    QPushButton, QFileDialog, QMessageBox, QComboBox,
+    QLineEdit, QLabel, QGroupBox, QFormLayout,
+    QDialog, QSpinBox, QFrame, QApplication
 )
 
-# AddCompanyDialog 클래스는 그대로 유지 (24-84줄)
-
-# 윈도우 크기 (123-127줄)
-self.setFixedSize(520, 340)  # 원격의 더 큰 크기 사용
-
-# App 클래스는 원격의 검색/정보 패널 + 로컬의 업체 추가 기능 모두 포함
-
+from openpyxl import load_workbook
+from openpyxl.workbook.workbook import Workbook
 
 from src.constants import ALLOWED_EXT
 from src.database import init_database, get_company_info, get_all_companies, upsert_company
 from src.excel_processor import process_all
+
+# app 모듈 (선택적 - 없어도 동작하도록)
+try:
+    from app.models.excel_table_model import ExcelSheetModel
+    from app.services.excel_io import load_workbook_safe, save_workbook_safe
+    from app.services.preprocess import preprocess_inplace
+    from app.utils.errors import AppError
+    HAS_APP_MODULE = True
+except ImportError:
+    ExcelSheetModel = None
+    load_workbook_safe = None
+    save_workbook_safe = None
+    preprocess_inplace = None
+    AppError = Exception
+    HAS_APP_MODULE = False
+
 
 class AddCompanyDialog(QDialog):
     """업체 추가 다이얼로그"""
@@ -86,120 +96,106 @@ class AddCompanyDialog(QDialog):
         }
 
 
-class DropZone(QFrame):
-    """드래그 앤 드롭 영역"""
-    def __init__(self, on_file_dropped):
-        super().__init__()
-        self.on_file_dropped = on_file_dropped
-        self.setAcceptDrops(True)
-        self.setFixedHeight(80)
-        self.setStyleSheet("QFrame { border: 1px dashed #888; border-radius: 6px; }")
-        lay = QVBoxLayout()
-        self.lbl = QLabel("엑셀 드래그 (.xlsx)")
-        self.lbl.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.lbl)
-        self.setLayout(lay)
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            p = Path(event.mimeData().urls()[0].toLocalFile())
-            if p.suffix.lower() in ALLOWED_EXT:
-                event.acceptProposedAction()
-                return
-        event.ignore()
-
-    def dropEvent(self, event):
-        urls = event.mimeData().urls()
-        if urls:
-            self.on_file_dropped(Path(urls[0].toLocalFile()))
-
-
-class App(QWidget):
-    """메인 애플리케이션 윈도우"""
+class MainWindow(QWidget):
+    """
+    - 좌측: 미리보기(QTableView) + 시트 선택 + 정보 패널
+    - 우측: 업로드/전처리/기업선택/search/export
+    """
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AMS")
+        self.setWindowTitle("엑셀 전처리 도구")
+        self.resize(1024, 576)  # 기본 윈도우 크기 (조절 가능)
 
-        self.setFixedSize(520, 340)
-
-        self.in_path: Path | None = None
-
+        self.file_path: Path | None = None
+        self.wb: Workbook | None = None
+        self.model: ExcelSheetModel | None = None
+        
         # 데이터베이스 초기화
         init_database()
 
-        root = QVBoxLayout()
+        # ===== 좌측: 미리보기 =====
+        self.sheet_combo = QComboBox()
+        self.sheet_combo.currentTextChanged.connect(self.on_sheet_changed)
 
-        # ===== 기업 선택 =====
-        company_row = QHBoxLayout()
-        company_row.addWidget(QLabel("기업:"))
+        self.table = QTableView()
+        self.table.setAlternatingRowColors(True)
+
+        left_top = QHBoxLayout()
+        left_top.addWidget(QLabel("시트"))
+        left_top.addWidget(self.sheet_combo, 1)
+
+        left_preview_box = QVBoxLayout()
+        left_preview_box.addLayout(left_top)
+        left_preview_box.addWidget(self.table, 1)
+
+        info_group = QGroupBox("정보")
+        form = QFormLayout()
+
+        self.lbl_company = QLabel("-")
+        self.lbl_remark = QLabel("-")
+        self.lbl_editable = QLabel("-")
+
+        for lbl in (self.lbl_company, self.lbl_remark, self.lbl_editable):
+            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        form.addRow("기업명", self.lbl_company)
+        form.addRow("비고(remark)", self.lbl_remark)
+        form.addRow("변경가능(rule)", self.lbl_editable)
+        info_group.setLayout(form)
+
+        left_preview_box.addWidget(info_group)
+
+        left = QWidget()
+        left.setLayout(left_preview_box)
+
+        # ===== 우측: 컨트롤 =====
+        self.btn_upload = QPushButton("업로드")
+        self.btn_preprocess = QPushButton("전처리")
+        
+        # 기업 선택
+        company_label = QLabel("기업 선택")
         self.company_combo = QComboBox()
         self.load_companies()
-        company_row.addWidget(self.company_combo, 1)
         
         # 업체 추가 버튼
+        company_row = QHBoxLayout()
+        company_row.addWidget(self.company_combo, 1)
         self.btn_add_company = QPushButton("+")
         self.btn_add_company.setFixedWidth(30)
         self.btn_add_company.setToolTip("업체 추가")
         self.btn_add_company.clicked.connect(self.add_company)
         company_row.addWidget(self.btn_add_company)
         
-        root.addLayout(company_row)
-
-        # ===== 검색(키워드) =====
-        search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Search:"))
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("search (현재는 UI만, 로직 전달은 미연결)")
-        search_row.addWidget(self.search_edit, 1)
-        root.addLayout(search_row)
+        self.search_edit.setPlaceholderText("search")
 
-        # ===== 정보 패널 =====
-        info_group = QGroupBox("정보")
-        form = QFormLayout()
+        self.btn_export_rule = QPushButton("export (rule)")
+        self.btn_export_final = QPushButton("export (최종 엑셀)")
 
-        self.lbl_company = QLabel("-")
-        self.lbl_remark = QLabel("-")
-        self.lbl_rule = QLabel("-")
+        self.btn_upload.clicked.connect(self.open_file)
+        self.btn_preprocess.clicked.connect(self.on_preprocess_clicked)
+        self.btn_export_rule.clicked.connect(self.export_rule_stub)
+        self.btn_export_final.clicked.connect(self.save_as_file)
 
-        for lbl in (self.lbl_company, self.lbl_remark, self.lbl_rule):
-            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        right_box = QVBoxLayout()
+        right_box.addWidget(self.btn_upload)
+        right_box.addWidget(self.btn_preprocess)
+        right_box.addSpacing(8)
+        right_box.addWidget(company_label)
+        right_box.addLayout(company_row)
+        right_box.addSpacing(8)
+        right_box.addWidget(self.search_edit)
+        right_box.addStretch(1)
+        right_box.addWidget(self.btn_export_rule)
+        right_box.addWidget(self.btn_export_final)
 
-        form.addRow("기업명", self.lbl_company)
-        form.addRow("상태", self.lbl_remark)
-        form.addRow("비고", self.lbl_rule)
+        right = QWidget()
+        right.setFixedWidth(220)
+        right.setLayout(right_box)
 
-        info_group.setLayout(form)
-        root.addWidget(info_group)
-
-        # ===== 드래그 앤 드롭 =====
-        self.drop = DropZone(self.set_file)
-        root.addWidget(self.drop)
-
-        # ===== 파일 선택 =====
-        row = QHBoxLayout()
-        self.lbl = QLabel("파일: (없음)")
-        self.lbl.setWordWrap(True)
-        btn = QPushButton("선택")
-        btn.clicked.connect(self.pick_file)
-        row.addWidget(self.lbl, 1)
-        row.addWidget(btn)
-        root.addLayout(row)
-
-        # ===== 전처리(=저장) 버튼 =====
-        btn_row = QHBoxLayout()
-        self.btn_preprocess = QPushButton("전처리")
-        self.btn_preprocess.setEnabled(False)
-        self.btn_preprocess.clicked.connect(self.export_processed)
-
-        self.btn_export = QPushButton("저장")
-        self.btn_export.setEnabled(False)
-        self.btn_export.clicked.connect(self.export_processed)
-
-        # 둘 다 같은 함수로 연결(원하면 하나만 남겨도 됨)
-        btn_row.addWidget(self.btn_preprocess)
-        btn_row.addWidget(self.btn_export)
-        root.addLayout(btn_row)
-
+        root = QHBoxLayout()
+        root.addWidget(left, 1)
+        root.addWidget(right)
         self.setLayout(root)
 
         self._set_info_defaults()
@@ -207,17 +203,18 @@ class App(QWidget):
 
     def _set_info_defaults(self):
         self.lbl_company.setText("-")
-        self.lbl_remark.setText("대기 중")
-        self.lbl_rule.setText("-")
-
+        self.lbl_remark.setText("-")
+        self.lbl_editable.setText("-")
+    
     def _on_company_changed(self, name: str):
-        if name and name != "(기업 정보 없음)":
+        """기업 선택 변경 시 정보 업데이트"""
+        if name and name != "(기업 정보 없음)" and name != "선택":
             self.lbl_company.setText(name)
         else:
             self.lbl_company.setText("-")
-
+    
     def load_companies(self):
-        """기업 목록 로드"""
+        """기업 목록 로드 (DB에서)"""
         self.company_combo.clear()
         companies = get_all_companies()
         if companies:
@@ -255,37 +252,63 @@ class App(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "오류", f"업체 추가 실패: {str(e)}")
 
-    def set_file(self, p: Path):
-        """파일 설정"""
-        if p.suffix.lower() not in ALLOWED_EXT:
-            QMessageBox.warning(self, "확장자", "현재는 .xlsx만 지원합니다.")
+    # ---------- 업로드 ----------
+    def open_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "엑셀 선택", "", "Excel Files (*.xlsx)")
+        if not path:
             return
 
-        self.in_path = p
-        self.lbl.setText(f"파일: {p.name}")
+        self.file_path = Path(path)
 
-        self.btn_preprocess.setEnabled(True)
-        self.btn_export.setEnabled(True)
+        try:
+            if HAS_APP_MODULE and load_workbook_safe:
+                self.wb = load_workbook_safe(self.file_path)
+            else:
+                self.wb = load_workbook(self.file_path)
+        except Exception as e:
+            QMessageBox.critical(self, "오류", str(e))
+            return
+
+        self.sheet_combo.blockSignals(True)
+        self.sheet_combo.clear()
+        self.sheet_combo.addItems(self.wb.sheetnames)
+        self.sheet_combo.blockSignals(False)
+
+        if self.wb.sheetnames:
+            self.sheet_combo.setCurrentIndex(0)
+            self.load_sheet(self.wb.sheetnames[0])
 
         company = self.company_combo.currentText()
-        self.lbl_company.setText(company if company != "(기업 정보 없음)" else "-")
-        self.lbl_remark.setText("업로드 완료 (전처리 가능)")
-        self.lbl_rule.setText("전처리 버튼을 누르면 처리 후 저장까지 진행")
+        if company and company != "선택" and company != "(기업 정보 없음)":
+            self.lbl_company.setText(company)
+        else:
+            self.lbl_company.setText("-")
+        self.lbl_remark.setText("업로드 완료. 전처리 전 상태")
+        self.lbl_editable.setText("현재: 전체 셀 편집 가능(추후 rule로 제한)")
 
-    def pick_file(self):
-        """파일 선택 다이얼로그"""
-        path, _ = QFileDialog.getOpenFileName(self, "엑셀 선택", "", "Excel Files (*.xlsx)")
-        if path:
-            self.set_file(Path(path))
+    # ---------- 시트 로드/변경 ----------
+    def load_sheet(self, sheet_name: str):
+        if not self.wb:
+            return
+        ws = self.wb[sheet_name]
+        self.model = ExcelSheetModel(ws, self)
+        self.table.setModel(self.model)
+        self.table.resizeColumnsToContents()
 
-    def export_processed(self):
-        """처리 후 저장(전처리 버튼/저장 버튼 공용)"""
-        if not self.in_path:
+    def on_sheet_changed(self, sheet_name: str):
+        if self.model and hasattr(self.model, 'apply_dirty_to_sheet'):
+            self.model.apply_dirty_to_sheet()
+        self.load_sheet(sheet_name)
+
+    # ---------- 전처리 ----------
+    def on_preprocess_clicked(self):
+        if not self.wb:
+            QMessageBox.information(self, "안내", "먼저 파일을 업로드하세요.")
             return
 
-        # 기업 정보 가져오기
+        # 기업 정보 확인
         company_name = self.company_combo.currentText()
-        if company_name == "(기업 정보 없음)":
+        if company_name == "(기업 정보 없음)" or company_name == "선택":
             QMessageBox.warning(self, "오류", "기업을 선택해주세요.")
             return
 
@@ -294,39 +317,85 @@ class App(QWidget):
             QMessageBox.warning(self, "오류", f"기업정보를 찾을 수 없습니다: {company_name}")
             return
 
-        # 저장 경로 선택
-        ts = datetime.now().strftime("%H%M%S")
-        default = f"{self.in_path.stem}_{ts}{self.in_path.suffix}"
+        # 미리보기에서 수정해둔 내용이 있으면 먼저 workbook에 반영
+        if self.model and hasattr(self.model, 'apply_dirty_to_sheet'):
+            self.model.apply_dirty_to_sheet()
 
-        save_path, _ = QFileDialog.getSaveFileName(self, "저장", default, "Excel Files (*.xlsx)")
+        keyword = self.search_edit.text().strip()
+
+        try:
+            # 기존 preprocess_inplace 사용 (app 모듈이 있는 경우)
+            if HAS_APP_MODULE and preprocess_inplace:
+                preprocess_inplace(self.wb, company=company_name, keyword=keyword)
+            else:
+                # app 모듈이 없으면 src.excel_processor 사용
+                # 임시 파일로 저장 후 처리
+                import tempfile
+                import os
+                with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+                    tmp_path = tmp.name
+                self.wb.save(tmp_path)
+                process_all(tmp_path, tmp_path, company_info)
+                self.wb = load_workbook(tmp_path)
+                os.unlink(tmp_path)
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"전처리 실패:\n{e}")
+            return
+
+        self.lbl_company.setText(company_name)
+        self.lbl_remark.setText("전처리 완료. 미리보기 갱신됨")
+        self.lbl_editable.setText("전처리 후: 필요한 경우 rule 기반 편집 제한 적용 예정")
+
+        self.refresh_preview_after_processing()
+
+    def refresh_preview_after_processing(self):
+        if not self.wb:
+            return
+
+        current_sheet = self.sheet_combo.currentText()
+        if not current_sheet or current_sheet not in self.wb.sheetnames:
+            current_sheet = self.wb.sheetnames[0] if self.wb.sheetnames else ""
+
+        self.sheet_combo.blockSignals(True)
+        self.sheet_combo.clear()
+        self.sheet_combo.addItems(self.wb.sheetnames)
+        if current_sheet:
+            self.sheet_combo.setCurrentText(current_sheet)
+        self.sheet_combo.blockSignals(False)
+
+        if current_sheet:
+            self.load_sheet(current_sheet)
+
+    # ---------- export ----------
+    def save_as_file(self):
+        if not self.wb:
+            QMessageBox.information(self, "안내", "먼저 파일을 업로드하세요.")
+            return
+
+        if self.model and hasattr(self.model, 'apply_dirty_to_sheet'):
+            self.model.apply_dirty_to_sheet()
+
+        save_path, _ = QFileDialog.getSaveFileName(self, "최종 엑셀로 저장", "", "Excel Files (*.xlsx)")
         if not save_path:
             return
 
-        # (현재는 UI만) keyword는 excel_processor.py가 받지 않아서 전달 안 함
-        keyword = self.search_edit.text().strip()
-        _ = keyword  # lint 방지용
-
         try:
-            self.lbl_remark.setText("전처리 중...")
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-
-            process_all(str(self.in_path), save_path, company_info)
-
-            QMessageBox.information(self, "완료", "처리 후 저장됨")
-            self.lbl_remark.setText("완료")
-            self.lbl_rule.setText("저장 완료")
+            if HAS_APP_MODULE and save_workbook_safe:
+                save_workbook_safe(self.wb, Path(save_path))
+            else:
+                self.wb.save(save_path)
+            QMessageBox.information(self, "완료", "저장했습니다.")
         except Exception as e:
             QMessageBox.critical(self, "오류", str(e))
-            self.lbl_remark.setText("오류 발생")
-            self.lbl_rule.setText("에러 확인 필요")
-        finally:
-            QApplication.restoreOverrideCursor()
+
+    def export_rule_stub(self):
+        QMessageBox.information(self, "안내", "rule export는 아직 연결 안 함.")
 
 
 def main():
     """애플리케이션 진입점"""
     app = QApplication(sys.argv)
-    w = App()
+    w = MainWindow()
     w.show()
     sys.exit(app.exec())
 
