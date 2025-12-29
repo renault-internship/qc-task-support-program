@@ -1,0 +1,4 @@
+﻿PySide6==6.9.2
+openpyxl>=3.1
+python-dateutil>=2.8
+pyinstaller>=6.0
