@@ -8,15 +8,75 @@ from datetime import datetime
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox, QLineEdit, QGroupBox, QFormLayout
+    QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox,
+    QDialog, QLineEdit, QFormLayout, QSpinBox, QGroupBox
 )
 
-
 from src.constants import ALLOWED_EXT
-from src.database import init_database, get_company_info, get_all_companies
+from src.database import init_database, get_company_info, get_all_companies, upsert_company
 from src.excel_processor import process_all
 
- 
+class AddCompanyDialog(QDialog):
+    """업체 추가 다이얼로그"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("업체 추가")
+        self.setFixedSize(400, 250)
+        
+        layout = QFormLayout()
+        
+        # SAP 코드
+        self.sap_code_edit = QLineEdit()
+        self.sap_code_edit.setPlaceholderText("예: B907")
+        layout.addRow("SAP 코드 *:", self.sap_code_edit)
+        
+        # SAP 기업명
+        self.sap_name_edit = QLineEdit()
+        self.sap_name_edit.setPlaceholderText("예: AMS")
+        layout.addRow("SAP 기업명 *:", self.sap_name_edit)
+        
+        # 규칙 테이블명
+        self.rule_table_edit = QLineEdit()
+        self.rule_table_edit.setPlaceholderText("예: rule_B907")
+        layout.addRow("규칙 테이블명 *:", self.rule_table_edit)
+        
+        # 보증 주행거리
+        self.warranty_mileage_spin = QSpinBox()
+        self.warranty_mileage_spin.setRange(0, 1000000)
+        self.warranty_mileage_spin.setValue(50000)
+        self.warranty_mileage_spin.setSuffix(" km")
+        layout.addRow("보증 주행거리:", self.warranty_mileage_spin)
+        
+        # 보증 기간 (년)
+        self.warranty_period_spin = QSpinBox()
+        self.warranty_period_spin.setRange(0, 100)
+        self.warranty_period_spin.setValue(3)
+        self.warranty_period_spin.setSuffix(" 년")
+        layout.addRow("보증 기간:", self.warranty_period_spin)
+        
+        # 버튼
+        button_layout = QHBoxLayout()
+        self.save_btn = QPushButton("저장")
+        self.save_btn.clicked.connect(self.accept)
+        self.cancel_btn = QPushButton("취소")
+        self.cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.save_btn)
+        button_layout.addWidget(self.cancel_btn)
+        layout.addRow(button_layout)
+        
+        self.setLayout(layout)
+    
+    def get_data(self):
+        """입력된 데이터 반환"""
+        return {
+            "sap_code": self.sap_code_edit.text().strip(),
+            "sap_name": self.sap_name_edit.text().strip(),
+            "rule_table_name": self.rule_table_edit.text().strip(),
+            "warranty_mileage": self.warranty_mileage_spin.value(),
+            "warranty_period": self.warranty_period_spin.value() * 365  # 년을 일로 변환
+        }
+
+
 class DropZone(QFrame):
     """드래그 앤 드롭 영역"""
     def __init__(self, on_file_dropped):
@@ -50,7 +110,8 @@ class App(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AMS")
-        self.setFixedSize(520, 340)
+
+        # self.setFixedSize(520, 340)
 
         self.in_path: Path | None = None
 
@@ -65,6 +126,14 @@ class App(QWidget):
         self.company_combo = QComboBox()
         self.load_companies()
         company_row.addWidget(self.company_combo, 1)
+        
+        # 업체 추가 버튼
+        self.btn_add_company = QPushButton("+")
+        self.btn_add_company.setFixedWidth(30)
+        self.btn_add_company.setToolTip("업체 추가")
+        self.btn_add_company.clicked.connect(self.add_company)
+        company_row.addWidget(self.btn_add_company)
+        
         root.addLayout(company_row)
 
         # ===== 검색(키워드) =====
@@ -146,6 +215,36 @@ class App(QWidget):
             self.company_combo.addItems(companies)
         else:
             self.company_combo.addItem("(기업 정보 없음)")
+    
+    def add_company(self):
+        """업체 추가 다이얼로그 열기"""
+        dialog = AddCompanyDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            data = dialog.get_data()
+            
+            # 필수 필드 검증
+            if not data["sap_code"]:
+                QMessageBox.warning(self, "오류", "SAP 코드를 입력해주세요.")
+                return
+            if not data["sap_name"]:
+                QMessageBox.warning(self, "오류", "SAP 기업명을 입력해주세요.")
+                return
+            if not data["rule_table_name"]:
+                QMessageBox.warning(self, "오류", "규칙 테이블명을 입력해주세요.")
+                return
+            
+            try:
+                upsert_company(
+                    sap_code=data["sap_code"],
+                    sap_name=data["sap_name"],
+                    rule_table_name=data["rule_table_name"],
+                    warranty_mileage=data["warranty_mileage"],
+                    warranty_period=data["warranty_period"]
+                )
+                QMessageBox.information(self, "완료", "업체가 추가되었습니다.")
+                self.load_companies()  # 목록 새로고침
+            except Exception as e:
+                QMessageBox.critical(self, "오류", f"업체 추가 실패: {str(e)}")
 
     def set_file(self, p: Path):
         """파일 설정"""
