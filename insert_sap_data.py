@@ -43,28 +43,11 @@ for supplier in suppliers:
         upsert_company(
             sap_code=sap_code,
             sap_name=sap_name,
+            renault_code=renault_code,
             warranty_mileage=default_warranty_mileage,
             warranty_period=default_warranty_period,
             rule_table_name=rule_table_name,
         )
-        
-        # renault_code는 별도로 업데이트 필요 (upsert_company에 renault_code 파라미터가 없으므로)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        
-        # renault_code 컬럼이 있는지 확인하고 업데이트
-        cursor.execute("PRAGMA table_info(sap)")
-        columns = [col[1] for col in cursor.fetchall()]
-        
-        if "renault_code" in columns:
-            cursor.execute("""
-                UPDATE sap 
-                SET renault_code = ? 
-                WHERE sap_code = ?
-            """, (renault_code, sap_code))
-            conn.commit()
-        
-        conn.close()
         
         print(f"✓ {sap_name} ({sap_code}) - RENAULT CODE: {renault_code}")
     except Exception as e:

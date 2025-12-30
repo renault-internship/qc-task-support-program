@@ -23,34 +23,23 @@ class AddCompanyDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("협력사 추가")
-        self.setFixedSize(400, 300)
+        self.setFixedSize(400, 200)
         
-        from PySide6.QtWidgets import QFormLayout, QSpinBox
+        from PySide6.QtWidgets import QFormLayout
         
         layout = QFormLayout()
         
         self.sap_code_edit = QLineEdit()
         self.sap_code_edit.setPlaceholderText("예: B907")
-        layout.addRow("SAP 코드 *:", self.sap_code_edit)
+        layout.addRow("협력사 코드 *:", self.sap_code_edit)
         
         self.sap_name_edit = QLineEdit()
         self.sap_name_edit.setPlaceholderText("예: AMS")
-        layout.addRow("SAP 기업명 *:", self.sap_name_edit)
+        layout.addRow("협력사 이름 *:", self.sap_name_edit)
         
-        self.warranty_mileage_spin = QSpinBox()
-        self.warranty_mileage_spin.setRange(0, 1000000)
-        self.warranty_mileage_spin.setValue(50000)
-        layout.addRow("보증 주행거리 (km):", self.warranty_mileage_spin)
-        
-        self.warranty_period_spin = QSpinBox()
-        self.warranty_period_spin.setRange(0, 100)
-        self.warranty_period_spin.setValue(3)
-        self.warranty_period_spin.setSuffix(" 년")
-        layout.addRow("보증 기간:", self.warranty_period_spin)
-        
-        self.rule_table_edit = QLineEdit()
-        self.rule_table_edit.setPlaceholderText("예: rule_B907 (자동 생성됨)")
-        layout.addRow("Rule 테이블명:", self.rule_table_edit)
+        self.renault_code_edit = QLineEdit()
+        self.renault_code_edit.setPlaceholderText("예: 247736")
+        layout.addRow("르노 코드 *:", self.renault_code_edit)
         
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -68,18 +57,20 @@ class AddCompanyDialog(QDialog):
         """입력 데이터 반환"""
         sap_code = self.sap_code_edit.text().strip()
         sap_name = self.sap_name_edit.text().strip()
-        rule_table = self.rule_table_edit.text().strip()
+        renault_code = self.renault_code_edit.text().strip()
         
-        # rule_table이 비어있으면 자동 생성
-        if not rule_table:
-            rule_table = f"rule_{sap_code}"
+        # 디폴트 값
+        warranty_mileage = 60000
+        warranty_period = 3 * 365  # 3년을 일로 변환
+        rule_table_name = f"rule_{sap_code}"  # rule_협력사코드
         
         return {
             "sap_code": sap_code,
             "sap_name": sap_name,
-            "warranty_mileage": self.warranty_mileage_spin.value(),
-            "warranty_period": self.warranty_period_spin.value() * 365,  # 년을 일로 변환
-            "rule_table_name": rule_table,
+            "renault_code": renault_code,
+            "warranty_mileage": warranty_mileage,
+            "warranty_period": warranty_period,
+            "rule_table_name": rule_table_name,
         }
 
 
@@ -567,16 +558,20 @@ class ComExManagementPageWidget(QWidget):
             data = dialog.get_data()
             
             if not data["sap_code"]:
-                QMessageBox.warning(self, "오류", "SAP 코드를 입력해주세요.")
+                QMessageBox.warning(self, "오류", "협력사 코드를 입력해주세요.")
                 return
             if not data["sap_name"]:
-                QMessageBox.warning(self, "오류", "SAP 기업명을 입력해주세요.")
+                QMessageBox.warning(self, "오류", "협력사 이름을 입력해주세요.")
+                return
+            if not data["renault_code"]:
+                QMessageBox.warning(self, "오류", "르노 코드를 입력해주세요.")
                 return
             
             try:
                 upsert_company(
                     sap_code=data["sap_code"],
                     sap_name=data["sap_name"],
+                    renault_code=data["renault_code"],
                     warranty_mileage=data["warranty_mileage"],
                     warranty_period=data["warranty_period"],
                     rule_table_name=data["rule_table_name"],
