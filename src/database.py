@@ -79,6 +79,19 @@ def get_all_companies() -> List[str]:
     return [row[0] for row in rows] if rows else []
 
 
+def get_all_companies_with_code() -> List[Dict[str, str]]:
+    """모든 SAP 기업 정보 조회 (sap_code와 sap_name 반환)"""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT sap_code, sap_name FROM sap ORDER BY sap_name")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [{"sap_code": row["sap_code"], "sap_name": row["sap_name"]} for row in rows] if rows else []
+
+
 def get_rules_from_table(rule_table_name: str) -> List[Dict[str, Any]]:
     """
     rule_table_name에 해당하는 테이블에서 모든 규칙 조회
