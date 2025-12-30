@@ -270,3 +270,140 @@ def add_rule_to_table(
         conn.close()
         raise ValueError(f"Rule 추가 실패: {str(e)}")
 
+
+def update_rule_in_table(
+    rule_table_name: str,
+    rule_id: int,
+    priority: int = None,
+    status: str = None,
+    repair_region: str = None,
+    vehicle_classification: str = None,
+    liability_ratio: float = None,
+    amount_cap_type: str = None,
+    project_code: str = None,
+    part_name: str = None,
+    part_no: str = None,
+    exclude_project_code: str = None,
+    warranty_mileage_override: int = None,
+    warranty_period_override: int = None,
+    amount_cap_value: int = None,
+    note: str = None,
+    valid_from: str = None,
+    valid_to: str = None,
+    engine_form: str = None,
+) -> bool:
+    """
+    rule 테이블의 규칙 수정
+    
+    Returns:
+        성공 여부
+    """
+    if not rule_table_name or not rule_table_name.startswith("rule_"):
+        raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
+    
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    
+    try:
+        updates = []
+        values = []
+        
+        if priority is not None:
+            updates.append("priority = ?")
+            values.append(priority)
+        if status is not None:
+            updates.append("status = ?")
+            values.append(status)
+        if repair_region is not None:
+            updates.append("repair_region = ?")
+            values.append(repair_region)
+        if vehicle_classification is not None:
+            updates.append("vehicle_classification = ?")
+            values.append(vehicle_classification)
+        if liability_ratio is not None:
+            updates.append("liability_ratio = ?")
+            values.append(liability_ratio)
+        if amount_cap_type is not None:
+            updates.append("amount_cap_type = ?")
+            values.append(amount_cap_type)
+        if project_code is not None:
+            updates.append("project_code = ?")
+            values.append(project_code)
+        if part_name is not None:
+            updates.append("part_name = ?")
+            values.append(part_name)
+        if part_no is not None:
+            updates.append("part_no = ?")
+            values.append(part_no)
+        if exclude_project_code is not None:
+            updates.append("exclude_project_code = ?")
+            values.append(exclude_project_code)
+        if warranty_mileage_override is not None:
+            updates.append("warranty_mileage_override = ?")
+            values.append(warranty_mileage_override)
+        if warranty_period_override is not None:
+            updates.append("warranty_period_override = ?")
+            values.append(warranty_period_override)
+        if amount_cap_value is not None:
+            updates.append("amount_cap_value = ?")
+            values.append(amount_cap_value)
+        if note is not None:
+            updates.append("note = ?")
+            values.append(note)
+        if valid_from is not None:
+            updates.append("valid_from = ?")
+            values.append(valid_from)
+        if valid_to is not None:
+            updates.append("valid_to = ?")
+            values.append(valid_to)
+        if engine_form is not None:
+            updates.append("engine_form = ?")
+            values.append(engine_form)
+        
+        if not updates:
+            conn.close()
+            return False
+        
+        updates.append("updated_at = DATETIME('now', 'localtime')")
+        values.append(rule_id)
+        
+        cursor.execute(f"""
+            UPDATE "{rule_table_name}"
+            SET {", ".join(updates)}
+            WHERE rule_id = ?
+        """, values)
+        
+        conn.commit()
+        conn.close()
+        return cursor.rowcount > 0
+    except sqlite3.OperationalError as e:
+        conn.close()
+        raise ValueError(f"Rule 수정 실패: {str(e)}")
+
+
+def delete_rule_from_table(rule_table_name: str, rule_id: int) -> bool:
+    """
+    rule 테이블에서 규칙 삭제
+    
+    Returns:
+        성공 여부
+    """
+    if not rule_table_name or not rule_table_name.startswith("rule_"):
+        raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
+    
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(f"""
+            DELETE FROM "{rule_table_name}"
+            WHERE rule_id = ?
+        """, (rule_id,))
+        
+        conn.commit()
+        conn.close()
+        return cursor.rowcount > 0
+    except sqlite3.OperationalError as e:
+        conn.close()
+        raise ValueError(f"Rule 삭제 실패: {str(e)}")
+
