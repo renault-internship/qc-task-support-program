@@ -12,11 +12,15 @@ from PySide6.QtWidgets import (
 
 
 class AddRuleDialog(QDialog):
-    """Rule 추가 다이얼로그"""
-    def __init__(self, rule_table_name: str, parent=None):
+    """Rule 추가/수정 다이얼로그"""
+    def __init__(self, rule_table_name: str, parent=None, rule_data: Dict[str, Any] = None):
         super().__init__(parent)
         self.rule_table_name = rule_table_name
-        self.setWindowTitle(f"Rule 추가 - {rule_table_name}")
+        self.rule_data = rule_data
+        self.is_edit_mode = rule_data is not None
+        
+        title = f"Rule 수정 - {rule_table_name}" if self.is_edit_mode else f"Rule 추가 - {rule_table_name}"
+        self.setWindowTitle(title)
         self.setFixedSize(500, 600)
         
         layout = QFormLayout()
@@ -94,6 +98,41 @@ class AddRuleDialog(QDialog):
         layout.addRow(button_layout)
         
         self.setLayout(layout)
+        
+        # 수정 모드인 경우 기존 데이터로 채우기
+        if self.is_edit_mode and rule_data:
+            self._load_rule_data(rule_data)
+    
+    def _load_rule_data(self, rule_data: Dict[str, Any]):
+        """기존 룰 데이터로 폼 채우기"""
+        if "priority" in rule_data:
+            self.priority_spin.setValue(rule_data["priority"])
+        if "status" in rule_data:
+            idx = self.status_combo.findText(rule_data["status"])
+            if idx >= 0:
+                self.status_combo.setCurrentIndex(idx)
+        if "repair_region" in rule_data:
+            self.repair_region_edit.setText(str(rule_data["repair_region"]))
+        if "vehicle_classification" in rule_data:
+            self.vehicle_class_edit.setText(str(rule_data["vehicle_classification"]))
+        if "project_code" in rule_data:
+            self.project_code_edit.setText(str(rule_data["project_code"]))
+        if "part_name" in rule_data:
+            self.part_name_edit.setText(str(rule_data["part_name"]))
+        if "part_no" in rule_data:
+            self.part_no_edit.setText(str(rule_data["part_no"]))
+        if "liability_ratio" in rule_data:
+            self.liability_ratio_spin.setValue(float(rule_data["liability_ratio"]))
+        if "amount_cap_type" in rule_data:
+            idx = self.amount_cap_combo.findText(rule_data["amount_cap_type"])
+            if idx >= 0:
+                self.amount_cap_combo.setCurrentIndex(idx)
+        if "amount_cap_value" in rule_data and rule_data["amount_cap_value"]:
+            self.amount_cap_spin.setValue(int(rule_data["amount_cap_value"]))
+        if "exclude_project_code" in rule_data:
+            self.exclude_project_code_edit.setText(str(rule_data["exclude_project_code"]))
+        if "note" in rule_data:
+            self.note_edit.setText(str(rule_data["note"]))
     
     def get_data(self) -> Dict[str, Any]:
         """입력된 데이터 반환"""
