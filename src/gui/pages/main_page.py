@@ -15,6 +15,8 @@ from PySide6.QtCore import Qt, QSortFilterProxyModel, QRegularExpression
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFileDialog, QMessageBox, QDialog, QAbstractItemView
 )
+from PySide6.QtWidgets import QMenu
+from src.gui.excel_filter import ExcelFilterProxyModel, ColumnFilterDialog
 
 from openpyxl.workbook.workbook import Workbook
 
@@ -303,6 +305,7 @@ class MainPageWidget(QWidget):
 
             row = min_row - 1
             col = min_col - 1
+            end_row = min(max_row_m, max_row) 
             row_span = max_row_m - min_row + 1
             col_span = max_col - min_col + 1
             table.setSpan(row, col, row_span, col_span)
@@ -318,18 +321,21 @@ class MainPageWidget(QWidget):
         edit_all = self.control_panel.get_edit_all_checkbox().isChecked()
         self.model.set_edit_all(edit_all)
 
-        self.proxy = QSortFilterProxyModel(self)
+        self.proxy = ExcelFilterProxyModel(self)
         self.proxy.setSourceModel(self.model)
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.proxy.setFilterKeyColumn(-1)
 
         table = self.preview_container.get_table()
-
+        table.clearSpans() 
         # 1) 테이블 UX 세팅
         self._setup_table_view()
 
         # 2) 모델 연결
         table.setModel(self.proxy)
+        hdr = table.horizontalHeader()
+        hdr.setContextMenuPolicy(Qt.CustomContextMenu)
+        hdr.customContextMenuRequested.connect(self._on_header_context_menu)
 
         # 3) 기본 폭 1회
         table.resizeColumnsToContents()
@@ -455,3 +461,36 @@ class MainPageWidget(QWidget):
             QMessageBox.information(self, "완료", "저장했습니다.")
         except AppError as e:
             QMessageBox.critical(self, "오류", str(e))
+    def _on_header_context_menu(self, pos):
+        if not self.proxy or not self.model:
+            return
+
+        table = self.preview_container.get_table()
+        hdr = table.horizontalHeader()
+
+        col = hdr.logicalIndexAt(pos)
+        if col < 0:
+            return
+
+        menu = QMenu(self)
+        act_filter = menu.addAction("필터...")
+        act_clear = menu.addAction("이 컬럼 필터 해제")
+        act_clear_all = menu.addAction("전체 필터 초기화")
+
+        picked = menu.exec(hdr.mapToGlobal(pos))
+        if not picked:
+            return
+
+        if picked == act_filter:
+            col_name = ExcelSheetModel.excel_col_name(col + 1)
+            dlg = ColumnFilterDialog(self.model, self.proxy, col, col_name, self)
+            dlg.exec()
+            return
+
+        if picked == act_clear:
+            self.proxy.clear_column_filter(col)
+            return
+
+        if picked == act_clear_all:
+            self.proxy.clear_all_column_filters()
+            return
