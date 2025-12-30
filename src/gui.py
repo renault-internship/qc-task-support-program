@@ -277,7 +277,44 @@ class MainWindow(QWidget):
         # 데이터베이스 초기화
         init_database()
 
-        # ===== 좌측: 미리보기 =====
+        # ===== 상단: 컨트롤 =====
+        top_bar = QHBoxLayout()
+        
+        self.btn_upload = QPushButton("업로드")
+        self.btn_preprocess = QPushButton("전처리")
+        self.btn_upload.clicked.connect(self.open_file)
+        self.btn_preprocess.clicked.connect(self.on_preprocess_clicked)
+        
+        top_bar.addWidget(self.btn_upload)
+        top_bar.addWidget(self.btn_preprocess)
+        top_bar.addSpacing(16)
+        
+        # 기업 선택
+        top_bar.addWidget(QLabel("기업:"))
+        self.company_combo = QComboBox()
+        self.load_companies()  # DB에서 기업 목록 로드
+        self.company_combo.currentTextChanged.connect(self._on_company_changed)
+        top_bar.addWidget(self.company_combo)
+        
+        top_bar.addSpacing(16)
+        
+        # 검색
+        top_bar.addWidget(QLabel("검색:"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("search (전체 검색)")
+        self.search_edit.textChanged.connect(self.on_search_changed)
+        top_bar.addWidget(self.search_edit, 1)
+        
+        top_bar.addSpacing(16)
+        
+        # 편집 제어: 전체 편집 vs 구상율만
+        self.chk_edit_all = QCheckBox("전체 셀 편집 허용")
+        self.chk_edit_all.setChecked(False)
+        self.chk_edit_all.stateChanged.connect(self.on_edit_mode_changed)
+        top_bar.addWidget(self.chk_edit_all)
+        top_bar.addStretch()
+
+        # ===== 중앙: 미리보기 =====
         self.sheet_combo = QComboBox()
         self.sheet_combo.currentTextChanged.connect(self.on_sheet_changed)
 
@@ -286,13 +323,13 @@ class MainWindow(QWidget):
         self.table.setSortingEnabled(True)
         self.table.setWordWrap(False)
 
-        left_top = QHBoxLayout()
-        left_top.addWidget(QLabel("시트"))
-        left_top.addWidget(self.sheet_combo, 1)
+        sheet_row = QHBoxLayout()
+        sheet_row.addWidget(QLabel("시트"))
+        sheet_row.addWidget(self.sheet_combo, 1)
 
-        left_preview_box = QVBoxLayout()
-        left_preview_box.addLayout(left_top)
-        left_preview_box.addWidget(self.table, 1)
+        preview_box = QVBoxLayout()
+        preview_box.addLayout(sheet_row)
+        preview_box.addWidget(self.table, 1)
 
         info_group = QGroupBox("정보")
         form = QFormLayout()
@@ -320,59 +357,25 @@ class MainWindow(QWidget):
         form.addRow("", self.btn_add_rule)
         info_group.setLayout(form)
 
-        left_preview_box.addWidget(info_group)
+        preview_box.addWidget(info_group)
 
-        left = QWidget()
-        left.setLayout(left_preview_box)
-
-        # ===== 우측: 컨트롤 =====
-        self.btn_upload = QPushButton("업로드")
-        self.btn_preprocess = QPushButton("전처리")
-        
-        # 기업 선택
-        company_label = QLabel("기업 선택")
-        self.company_combo = QComboBox()
-        self.load_companies()  # DB에서 기업 목록 로드
-        self.company_combo.currentTextChanged.connect(self._on_company_changed)
-
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("search (전체 검색)")
-        self.search_edit.textChanged.connect(self.on_search_changed)
-
-        # 편집 제어: 전체 편집 vs 구상율만
-        self.chk_edit_all = QCheckBox("전체 셀 편집 허용")
-        self.chk_edit_all.setChecked(False)
-        self.chk_edit_all.stateChanged.connect(self.on_edit_mode_changed)
-
+        # ===== 하단: Export 버튼 =====
+        bottom_bar = QHBoxLayout()
+        bottom_bar.addStretch()
         self.btn_export_rule = QPushButton("export (rule)")
         self.btn_export_final = QPushButton("export (최종 엑셀)")
-
-        self.btn_upload.clicked.connect(self.open_file)
-        self.btn_preprocess.clicked.connect(self.on_preprocess_clicked)
         self.btn_export_rule.clicked.connect(self.export_rule_stub)
         self.btn_export_final.clicked.connect(self.save_as_file)
+        bottom_bar.addWidget(self.btn_export_rule)
+        bottom_bar.addWidget(self.btn_export_final)
 
-        right_box = QVBoxLayout()
-        right_box.addWidget(self.btn_upload)
-        right_box.addWidget(self.btn_preprocess)
-        right_box.addSpacing(8)
-        right_box.addWidget(company_label)
-        right_box.addWidget(self.company_combo)
-        right_box.addSpacing(8)
-        right_box.addWidget(self.search_edit)
-        right_box.addSpacing(8)
-        right_box.addWidget(self.chk_edit_all)
-        right_box.addStretch(1)
-        right_box.addWidget(self.btn_export_rule)
-        right_box.addWidget(self.btn_export_final)
-
-        right = QWidget()
-        right.setFixedWidth(240)
-        right.setLayout(right_box)
-
-        root = QHBoxLayout()
-        root.addWidget(left, 1)
-        root.addWidget(right)
+        # ===== 전체 레이아웃 =====
+        root = QVBoxLayout()
+        root.addLayout(top_bar)
+        root.addSpacing(8)
+        root.addLayout(preview_box, 1)
+        root.addSpacing(8)
+        root.addLayout(bottom_bar)
         self.setLayout(root)
 
         self._set_info_defaults()
