@@ -132,8 +132,75 @@ def get_rules_from_table(rule_table_name: str) -> List[Dict[str, Any]]:
         return []
 
 
+def create_rule_table(rule_table_name: str, cursor=None) -> bool:
+    """
+    룰 테이블 생성
+    
+    Args:
+        rule_table_name: 규칙 테이블명 (예: "rule_B907")
+        cursor: 기존 커서 (None이면 새 연결 생성)
+        
+    Returns:
+        생성 성공 여부
+    """
+    if not rule_table_name or not rule_table_name.startswith("rule_"):
+        raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
+    
+    use_existing_cursor = cursor is not None
+    if not use_existing_cursor:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+    
+    try:
+        # 테이블이 이미 존재하는지 확인
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name=?
+        """, (rule_table_name,))
+        
+        if cursor.fetchone():
+            # 테이블이 이미 존재함
+            if not use_existing_cursor:
+                conn.close()
+            return True
+        
+        # 룰 테이블 생성
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS "{rule_table_name}" (
+                rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                priority INTEGER NOT NULL DEFAULT -1,
+                status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+                repair_region TEXT NOT NULL CHECK (repair_region IN ('DOMESTIC','OVERSEAS','ALL')),
+                project_code TEXT NOT NULL DEFAULT 'ALL',
+                exclude_project_code TEXT,
+                vehicle_classification TEXT NOT NULL DEFAULT 'ALL',
+                part_no TEXT NOT NULL DEFAULT 'ALL',
+                part_name TEXT NOT NULL DEFAULT 'ALL',
+                engine_form TEXT NOT NULL DEFAULT 'ALL',
+                warranty_mileage_override INTEGER,
+                warranty_period_override INTEGER,
+                liability_ratio REAL NOT NULL,
+                amount_cap_type TEXT NOT NULL DEFAULT 'NONE' CHECK (amount_cap_type IN ('LABOR','OUTSOURCE_LABOR','BOTH_LABOR','NONE')),
+                amount_cap_value INTEGER,
+                valid_from TEXT CHECK (valid_from IS NULL OR date(valid_from) IS NOT NULL),
+                valid_to TEXT CHECK (valid_to IS NULL OR date(valid_to) IS NOT NULL),
+                created_at TEXT DEFAULT (DATETIME('now', 'localtime')),
+                updated_at TEXT DEFAULT (DATETIME('now', 'localtime'))
+            )
+        """)
+        
+        if not use_existing_cursor:
+            conn.commit()
+            conn.close()
+        return True
+    except sqlite3.Error as e:
+        if not use_existing_cursor:
+            conn.close()
+        raise ValueError(f"룰 테이블 생성 실패: {str(e)}")
+
+
 def upsert_company(sap_code: str, sap_name: str = None, warranty_mileage: int = None, 
-                   warranty_period: int = None, rule_table_name: str = None):
+                   warranty_period: int = None, rule_table_name: str = None, renault_code: str = None):
     """
     SAP 기업정보 저장/업데이트
     
@@ -143,6 +210,7 @@ def upsert_company(sap_code: str, sap_name: str = None, warranty_mileage: int = 
         warranty_mileage: 보증 주행거리
         warranty_period: 보증 기간 (일 단위)
         rule_table_name: 규칙 테이블명
+        renault_code: 르노 코드
     """
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
@@ -167,6 +235,9 @@ def upsert_company(sap_code: str, sap_name: str = None, warranty_mileage: int = 
         if rule_table_name is not None:
             updates.append("rule_table_name = ?")
             values.append(rule_table_name)
+        if renault_code is not None:
+            updates.append("renault_code = ?")
+            values.append(renault_code)
         
         if updates:
             updates.append("updated_at = DATETIME('now', 'localtime')")
@@ -177,12 +248,31 @@ def upsert_company(sap_code: str, sap_name: str = None, warranty_mileage: int = 
                 SET {", ".join(updates)}
                 WHERE sap_code = ?
             """, values)
+        
+        # 기존 협력사 업데이트 시에도 룰 테이블이 없으면 생성
+        final_rule_table_name = rule_table_name or existing.get("rule_table_name")
+        if final_rule_table_name:
+            try:
+                create_rule_table(final_rule_table_name, cursor)
+            except Exception as e:
+                # 룰 테이블 생성 실패해도 업데이트는 진행
+                pass
     else:
-        # 삽입
+        # 삽입 (새 협력사 추가)
         cursor.execute("""
-            INSERT INTO sap (sap_code, sap_name, warranty_mileage, warranty_period, rule_table_name)
-            VALUES (?, ?, ?, ?, ?)
-        """, (sap_code, sap_name, warranty_mileage, warranty_period, rule_table_name))
+            INSERT INTO sap (sap_code, sap_name, warranty_mileage, warranty_period, rule_table_name, renault_code)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (sap_code, sap_name, warranty_mileage, warranty_period, rule_table_name, renault_code))
+        
+        # 새 협력사 추가 시 룰 테이블도 생성 (같은 트랜잭션에서)
+        if rule_table_name:
+            try:
+                create_rule_table(rule_table_name, cursor)
+            except Exception as e:
+                # 룰 테이블 생성 실패 시 롤백
+                conn.rollback()
+                conn.close()
+                raise ValueError(f"협력사 추가 실패: {str(e)}")
     
     conn.commit()
     conn.close()
