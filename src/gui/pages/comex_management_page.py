@@ -197,14 +197,37 @@ class RuleManagementWidget(QWidget):
             self.table.setColumnCount(0)
             return
         
+        # 컬럼명 한국어 매핑
+        column_name_map = {
+            "rule_id": "규칙 ID",
+            "priority": "우선순위",
+            "status": "규칙적용상태",
+            "repair_region": "수리 지역",
+            "project_code": "프로젝트 코드",
+            "exclude_project_code": "제외 프로젝트 코드",
+            "vehicle_classification": "차계",
+            "part_no": "부품번호",
+            "part_name": "부품명",
+            "engine_form": "엔진 형식",
+            "warranty_mileage_override": "보증 주행거리 상한",
+            "warranty_period_override": "보증 기간",
+            "liability_ratio": "구상율",
+            "amount_cap_type": "금액 상한 유형",
+            "amount_cap_value": "상한 금액",
+            "valid_from": "적용 시작일",
+            "valid_to": "적용 종료일",
+            "created_at": "생성일시",
+            "updated_at": "수정일시",
+        }
+        
         # 모든 컬럼 가져오기
         all_columns = set()
         for rule in self.rules:
             all_columns.update(rule.keys())
         
         # 컬럼 순서 정렬 (rule_id, priority, status 등을 앞에)
-        column_order = ["rule_id", "priority", "status", "repair_region", "vehicle_classification",
-                       "project_code", "part_name", "part_no", "exclude_project_code",
+        column_order = ["rule_id", "priority", "status", "repair_region", "project_code","exclude_project_code",
+                       "vehicle_classification", "part_name", "part_no", 
                        "liability_ratio", "amount_cap_type", "amount_cap_value",
                        "warranty_mileage_override", "warranty_period_override",
                        "valid_from", "valid_to", "engine_form",
@@ -219,9 +242,12 @@ class RuleManagementWidget(QWidget):
         
         ordered_columns.extend(sorted(all_columns))
         
+        # 한국어 헤더 레이블 생성
+        korean_headers = [column_name_map.get(col, col) for col in ordered_columns]
+        
         # 테이블 설정
         self.table.setColumnCount(len(ordered_columns))
-        self.table.setHorizontalHeaderLabels(ordered_columns)
+        self.table.setHorizontalHeaderLabels(korean_headers)
         self.table.setRowCount(len(self.rules))
         
         # 데이터 채우기

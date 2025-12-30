@@ -41,6 +41,7 @@ class AddRuleDialog(QDialog):
         # Repair Region (CHECK IN ('DOMESTIC','OVERSEAS','ALL'))
         self.repair_region_combo = QComboBox()
         self.repair_region_combo.addItems(["DOMESTIC", "OVERSEAS", "ALL"])
+        self.repair_region_combo.setCurrentText("ALL")  # 기본값
         layout.addRow("수리 지역 *:", self.repair_region_combo)
         
         # Project Code (DEFAULT 'ALL')
@@ -158,7 +159,8 @@ class AddRuleDialog(QDialog):
             self.project_code_edit.setText(str(rule_data["project_code"]))
         
         if "exclude_project_code" in rule_data:
-            self.exclude_project_code_edit.setText(str(rule_data["exclude_project_code"]))
+            exclude_code = rule_data["exclude_project_code"]
+            self.exclude_project_code_edit.setText(exclude_code if exclude_code is not None else "")
         
         if "vehicle_classification" in rule_data:
             self.vehicle_class_edit.setText(str(rule_data["vehicle_classification"]))
