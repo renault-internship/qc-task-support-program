@@ -219,46 +219,44 @@ def update_company_remark(sap_code: str, remark: str) -> bool:
 
 def add_rule_to_table(
     rule_table_name: str,
-    priority: int,
     status: str,
     repair_region: str,
     vehicle_classification: str,
     liability_ratio: float,
     amount_cap_type: str,
-    project_code: str = "",
-    part_name: str = "",
-    part_no: str = "",
-    exclude_project_code: str = "",
+    project_code: str = "ALL",
+    part_name: str = "ALL",
+    part_no: str = "ALL",
+    engine_form: str = "ALL",
+    exclude_project_code: str = None,
     warranty_mileage_override: int = None,
     warranty_period_override: int = None,
     amount_cap_value: int = None,
-    note: str = "",
-    valid_from: str = "",
-    valid_to: str = "",
-    engine_form: str = "",
+    valid_from: str = None,
+    valid_to: str = None,
+    priority: int = None,  # None이면 -1로 설정되어 트리거가 자동으로 채움
 ) -> int:
     """
     rule 테이블에 규칙 추가
     
     Args:
         rule_table_name: 규칙 테이블명 (예: "rule_B907")
-        priority: 우선순위
-        status: 상태 (예: "ACTIVE", "INACTIVE")
-        repair_region: 수리 지역
-        vehicle_classification: 차량 분류
-        liability_ratio: 구상율
-        amount_cap_type: 금액 상한 타입
-        project_code: 프로젝트 코드 (선택, 비워두면 모든 프로젝트)
-        part_name: 부품명 (선택, 비워두면 모든 부품)
-        part_no: 부품 번호 (선택)
-        exclude_project_code: 제외 프로젝트 코드 (선택)
-        warranty_mileage_override: 보증 주행거리 오버라이드 (선택)
-        warranty_period_override: 보증 기간 오버라이드 (선택)
-        amount_cap_value: 금액 상한 값 (선택)
-        note: 비고 (선택)
-        valid_from: 유효 시작일 (선택)
-        valid_to: 유효 종료일 (선택)
-        engine_form: 엔진 형태 (선택)
+        status: 상태 (예: "ACTIVE", "INACTIVE") - DEFAULT 'ACTIVE'
+        repair_region: 수리 지역 ('DOMESTIC','OVERSEAS','ALL')
+        vehicle_classification: 차량 분류 - DEFAULT 'ALL'
+        liability_ratio: 구상율 (필수)
+        amount_cap_type: 금액 상한 타입 ('LABOR','OUTSOURCE_LABOR','BOTH_LABOR','NONE') - DEFAULT 'NONE'
+        project_code: 프로젝트 코드 - DEFAULT 'ALL'
+        part_name: 부품명 - DEFAULT 'ALL'
+        part_no: 부품 번호 - DEFAULT 'ALL'
+        engine_form: 엔진 형태 - DEFAULT 'ALL'
+        exclude_project_code: 제외 프로젝트 코드 (NULL 허용)
+        warranty_mileage_override: 보증 주행거리 오버라이드 (NULL 허용)
+        warranty_period_override: 보증 기간 오버라이드 (NULL 허용, 일 단위)
+        amount_cap_value: 금액 상한 값 (NULL 허용)
+        valid_from: 유효 시작일 (NULL 허용, YYYY-MM-DD 형식)
+        valid_to: 유효 종료일 (NULL 허용, YYYY-MM-DD 형식)
+        priority: 우선순위 (None이면 -1로 설정되어 트리거가 자동으로 채움)
         
     Returns:
         추가된 rule_id
@@ -273,36 +271,76 @@ def add_rule_to_table(
         # 필수 필드 검증
         if not repair_region:
             raise ValueError("수리 지역은 필수입니다.")
+        if repair_region not in ["DOMESTIC", "OVERSEAS", "ALL"]:
+            raise ValueError("수리 지역은 DOMESTIC, OVERSEAS, ALL 중 하나여야 합니다.")
+        
         if not vehicle_classification:
-            raise ValueError("차량 분류는 필수입니다.")
+            vehicle_classification = "ALL"
+        
         if liability_ratio is None:
             raise ValueError("구상율은 필수입니다.")
-        if not amount_cap_type:
-            raise ValueError("금액 상한 타입은 필수입니다.")
         
-        # INSERT 쿼리 실행
+        if not amount_cap_type:
+            amount_cap_type = "NONE"
+        if amount_cap_type not in ["LABOR", "OUTSOURCE_LABOR", "BOTH_LABOR", "NONE"]:
+            raise ValueError("금액 상한 타입은 LABOR, OUTSOURCE_LABOR, BOTH_LABOR, NONE 중 하나여야 합니다.")
+        
+        if not project_code:
+            project_code = "ALL"
+        if not part_name:
+            part_name = "ALL"
+        if not part_no:
+            part_no = "ALL"
+        if not engine_form:
+            engine_form = "ALL"
+        
+        if not status:
+            status = "ACTIVE"
+        if status not in ["ACTIVE", "INACTIVE"]:
+            raise ValueError("상태는 ACTIVE 또는 INACTIVE여야 합니다.")
+        
+        # Priority: None이면 -1로 설정 (트리거가 자동으로 채움)
+        if priority is None:
+            priority = -1
+        
+        # 날짜 형식 검증
+        if valid_from and valid_from.strip():
+            try:
+                from datetime import datetime
+                datetime.strptime(valid_from.strip(), "%Y-%m-%d")
+            except ValueError:
+                raise ValueError("유효 시작일은 YYYY-MM-DD 형식이어야 합니다.")
+        
+        if valid_to and valid_to.strip():
+            try:
+                from datetime import datetime
+                datetime.strptime(valid_to.strip(), "%Y-%m-%d")
+            except ValueError:
+                raise ValueError("유효 종료일은 YYYY-MM-DD 형식이어야 합니다.")
+        
+        # INSERT 쿼리 실행 (note 컬럼 제거됨)
         cursor.execute(f"""
             INSERT INTO "{rule_table_name}" (
                 priority, status, repair_region, project_code, exclude_project_code,
                 vehicle_classification, part_no, part_name, engine_form,
                 warranty_mileage_override, warranty_period_override,
                 liability_ratio, amount_cap_type, amount_cap_value,
-                note, valid_from, valid_to,
+                valid_from, valid_to,
                 created_at, updated_at
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?, ?,
                 ?, ?, ?,
-                ?, ?, ?,
+                ?, ?,
                 DATETIME('now', 'localtime'), DATETIME('now', 'localtime')
             )
         """, (
-            priority, status, repair_region, project_code or "", exclude_project_code or "",
-            vehicle_classification, part_no or "", part_name or "", engine_form or "",
+            priority, status, repair_region, project_code, exclude_project_code,
+            vehicle_classification, part_no, part_name, engine_form,
             warranty_mileage_override, warranty_period_override,
             liability_ratio, amount_cap_type, amount_cap_value,
-            note or "", valid_from or "", valid_to or "",
+            valid_from, valid_to,
         ))
         
         rule_id = cursor.lastrowid
@@ -331,7 +369,6 @@ def update_rule_in_table(
     warranty_mileage_override: int = None,
     warranty_period_override: int = None,
     amount_cap_value: int = None,
-    note: str = None,
     valid_from: str = None,
     valid_to: str = None,
     engine_form: str = None,
@@ -391,9 +428,6 @@ def update_rule_in_table(
         if amount_cap_value is not None:
             updates.append("amount_cap_value = ?")
             values.append(amount_cap_value)
-        if note is not None:
-            updates.append("note = ?")
-            values.append(note)
         if valid_from is not None:
             updates.append("valid_from = ?")
             values.append(valid_from)

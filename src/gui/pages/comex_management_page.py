@@ -293,7 +293,7 @@ class RuleManagementWidget(QWidget):
             try:
                 rule_id = add_rule_to_table(
                     rule_table_name=self.current_rule_table,
-                    priority=data["priority"],
+                    priority=data.get("priority"),
                     status=data["status"],
                     repair_region=data["repair_region"],
                     vehicle_classification=data["vehicle_classification"],
@@ -302,9 +302,13 @@ class RuleManagementWidget(QWidget):
                     project_code=data["project_code"],
                     part_name=data["part_name"],
                     part_no=data["part_no"],
-                    exclude_project_code=data["exclude_project_code"],
-                    amount_cap_value=data["amount_cap_value"],
-                    note=data["note"],
+                    engine_form=data.get("engine_form", "ALL"),
+                    exclude_project_code=data.get("exclude_project_code"),
+                    warranty_mileage_override=data.get("warranty_mileage_override"),
+                    warranty_period_override=data.get("warranty_period_override"),
+                    amount_cap_value=data.get("amount_cap_value"),
+                    valid_from=data.get("valid_from"),
+                    valid_to=data.get("valid_to"),
                 )
                 
                 QMessageBox.information(self, "완료", f"규칙이 추가되었습니다. (ID: {rule_id})")
@@ -351,9 +355,13 @@ class RuleManagementWidget(QWidget):
                     project_code=data.get("project_code"),
                     part_name=data.get("part_name"),
                     part_no=data.get("part_no"),
+                    engine_form=data.get("engine_form"),
                     exclude_project_code=data.get("exclude_project_code"),
+                    warranty_mileage_override=data.get("warranty_mileage_override"),
+                    warranty_period_override=data.get("warranty_period_override"),
                     amount_cap_value=data.get("amount_cap_value"),
-                    note=data.get("note"),
+                    valid_from=data.get("valid_from"),
+                    valid_to=data.get("valid_to"),
                 )
                 
                 if success:
