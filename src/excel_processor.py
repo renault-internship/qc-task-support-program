@@ -226,7 +226,7 @@ def add_sum_rows(ws, data_rows: List[int], occ_col: int, chb_col: int) -> None:
 
 
 # =========================================================
-# 8) 상단 서브토탈(SUBTOTAL 109, 필터 반영)
+# 8) 상단 서브토탈(SUBTOTAL 9, 필터 반영)
 # =========================================================
 def set_subtotal_if_empty(ws, target_col: int, data_rows: List[int], subtotal_row: int) -> None:
     if not data_rows:
@@ -242,7 +242,7 @@ def set_subtotal_if_empty(ws, target_col: int, data_rows: List[int], subtotal_ro
         ws,
         subtotal_row,
         target_col,
-        f"=SUBTOTAL(109,{ws.cell(row=first_row, column=target_col).coordinate}:{ws.cell(row=last_row, column=target_col).coordinate})",
+        f"=SUBTOTAL(9,{ws.cell(row=first_row, column=target_col).coordinate}:{ws.cell(row=last_row, column=target_col).coordinate})",
     )
 
 
