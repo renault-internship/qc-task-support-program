@@ -81,7 +81,7 @@ class MainPageWidget(QWidget):
         self.preview_container.get_sheet_combo().currentTextChanged.connect(self.on_sheet_changed)
         
         # 정보 패널
-        self.info_panel.get_add_rule_button().clicked.connect(self.add_rule)
+        # self.info_panel.get_add_rule_button().clicked.connect(self.add_rule)
         self.info_panel.get_editable_label().mousePressEvent = self.show_rules_dialog
         
         # Export 버튼
@@ -89,9 +89,10 @@ class MainPageWidget(QWidget):
     
     def _set_info_defaults(self):
         """정보 패널 기본값 설정"""
-        self.info_panel.set_company("-")
+        # self.info_panel.set_company("-")
         self.info_panel.set_remark("-")
         self.info_panel.set_editable("-")
+    
     
     def load_companies(self):
         """기업 목록 로드 (DB에서)"""
@@ -110,7 +111,11 @@ class MainPageWidget(QWidget):
             # sap 테이블에서 기업 정보 가져오기
             company_info = get_company_info(name)
             if company_info:
-                self.info_panel.set_company(name)
+                # self.info_panel.set_company(name)
+                # 🔹🔹🔹 여기 추가 🔹🔹🔹
+                remark = company_info.get("remark", "-")
+                self.info_panel.set_remark(remark)
+                # 🔹🔹🔹🔹🔹🔹🔹🔹🔹🔹🔹🔹
                 
                 # rule_table_name 가져오기
                 rule_table_name = company_info.get("rule_table_name")
@@ -131,11 +136,11 @@ class MainPageWidget(QWidget):
                 # 현재 선택된 기업 정보 저장 (rule 추가 시 사용)
                 self.current_company_info = company_info
             else:
-                self.info_panel.set_company("-")
+                # self.info_panel.set_company("-")
                 self.info_panel.set_editable("-")
                 self.current_company_info = None
         else:
-            self.info_panel.set_company("-")
+            # self.info_panel.set_company("-")
             self.info_panel.set_editable("-")
             self.current_company_info = None
         
@@ -250,7 +255,7 @@ class MainPageWidget(QWidget):
             self.load_sheet(self.wb.sheetnames[0])
 
         company = self.control_panel.get_company_combo().currentText()
-        self.info_panel.set_company(company if company != "선택" else "-")
+        # self.info_panel.set_company(company if company != "선택" else "-")
         self.info_panel.set_remark("업로드 완료. 전처리 전 상태")
         self._refresh_editable_label()
 
@@ -356,7 +361,7 @@ class MainPageWidget(QWidget):
             return
 
         company = self.control_panel.get_company_combo().currentText()
-        self.info_panel.set_company(company if company != "선택" else "-")
+        # self.info_panel.set_company(company if company != "선택" else "-")
         self.info_panel.set_remark("전처리 완료. 미리보기 갱신됨")
         self.refresh_preview_after_processing()
 
