@@ -19,45 +19,78 @@ class AddRuleDialog(QDialog):
         self.rule_data = rule_data
         self.is_edit_mode = rule_data is not None
         
-        title = f"Rule 수정 - {rule_table_name}" if self.is_edit_mode else f"Rule 추가 - {rule_table_name}"
+        title = f"규칙 수정 - {rule_table_name}" if self.is_edit_mode else f"규칙 추가 - {rule_table_name}"
         self.setWindowTitle(title)
-        self.setFixedSize(500, 600)
+        self.setFixedSize(500, 700)  # 높이 증가
         
         layout = QFormLayout()
         
-        # Priority
+        # Priority (DEFAULT -1, 트리거로 자동 채움)
         self.priority_spin = QSpinBox()
-        self.priority_spin.setRange(1, 999)
-        self.priority_spin.setValue(100)
-        layout.addRow("우선순위 *:", self.priority_spin)
+        self.priority_spin.setRange(-1, 999)
+        self.priority_spin.setValue(-1)
+        self.priority_spin.setSpecialValueText("자동 (트리거)")
+        layout.addRow("우선순위:", self.priority_spin)
         
-        # Status
+        # Status (DEFAULT 'ACTIVE', CHECK IN ('ACTIVE','INACTIVE'))
         self.status_combo = QComboBox()
         self.status_combo.addItems(["ACTIVE", "INACTIVE"])
+        self.status_combo.setCurrentText("ACTIVE")  # 기본값
         layout.addRow("상태 *:", self.status_combo)
         
-        # Repair Region
-        self.repair_region_edit = QLineEdit()
-        layout.addRow("수리 지역 *:", self.repair_region_edit)
+        # Repair Region (CHECK IN ('DOMESTIC','OVERSEAS','ALL'))
+        self.repair_region_combo = QComboBox()
+        self.repair_region_combo.addItems(["DOMESTIC", "OVERSEAS", "ALL"])
+        layout.addRow("수리 지역 *:", self.repair_region_combo)
         
-        # Vehicle Classification
+        # Project Code (DEFAULT 'ALL')
+        self.project_code_edit = QLineEdit()
+        self.project_code_edit.setPlaceholderText("기본값: ALL")
+        self.project_code_edit.setText("ALL")  # 기본값
+        layout.addRow("프로젝트 코드 *:", self.project_code_edit)
+        
+        # Exclude Project Code (NULL 허용)
+        self.exclude_project_code_edit = QLineEdit()
+        self.exclude_project_code_edit.setPlaceholderText("제외할 프로젝트 코드 (선택사항)")
+        layout.addRow("제외 프로젝트 코드:", self.exclude_project_code_edit)
+        
+        # Vehicle Classification (DEFAULT 'ALL')
         self.vehicle_class_edit = QLineEdit()
+        self.vehicle_class_edit.setPlaceholderText("기본값: ALL")
+        self.vehicle_class_edit.setText("ALL")  # 기본값
         layout.addRow("차량 분류 *:", self.vehicle_class_edit)
         
-        # Project Code (선택)
-        self.project_code_edit = QLineEdit()
-        self.project_code_edit.setPlaceholderText("비워두면 모든 프로젝트")
-        layout.addRow("프로젝트 코드:", self.project_code_edit)
-        
-        # Part Name (선택)
-        self.part_name_edit = QLineEdit()
-        self.part_name_edit.setPlaceholderText("비워두면 모든 부품")
-        layout.addRow("부품명:", self.part_name_edit)
-        
-        # Part No (선택)
+        # Part No (NOT NULL DEFAULT 'ALL')
         self.part_no_edit = QLineEdit()
-        self.part_no_edit.setPlaceholderText("선택사항")
-        layout.addRow("부품 번호:", self.part_no_edit)
+        self.part_no_edit.setPlaceholderText("기본값: ALL")
+        self.part_no_edit.setText("ALL")  # 기본값
+        layout.addRow("부품 번호 *:", self.part_no_edit)
+        
+        # Part Name (NOT NULL DEFAULT 'ALL')
+        self.part_name_edit = QLineEdit()
+        self.part_name_edit.setPlaceholderText("기본값: ALL")
+        self.part_name_edit.setText("ALL")  # 기본값
+        layout.addRow("부품명 *:", self.part_name_edit)
+        
+        # Engine Form (NOT NULL DEFAULT 'ALL')
+        self.engine_form_edit = QLineEdit()
+        self.engine_form_edit.setPlaceholderText("기본값: ALL")
+        self.engine_form_edit.setText("ALL")  # 기본값
+        layout.addRow("엔진 형태 *:", self.engine_form_edit)
+        
+        # Warranty Mileage Override (NULL 허용)
+        self.warranty_mileage_spin = QSpinBox()
+        self.warranty_mileage_spin.setRange(0, 1000000)
+        self.warranty_mileage_spin.setValue(0)
+        self.warranty_mileage_spin.setSpecialValueText("없음")
+        layout.addRow("보증 주행거리 오버라이드 (km):", self.warranty_mileage_spin)
+        
+        # Warranty Period Override (NULL 허용, 일 단위)
+        self.warranty_period_spin = QSpinBox()
+        self.warranty_period_spin.setRange(0, 3650)
+        self.warranty_period_spin.setValue(0)
+        self.warranty_period_spin.setSpecialValueText("없음")
+        layout.addRow("보증 기간 오버라이드 (일):", self.warranty_period_spin)
         
         # Liability Ratio (필수)
         self.liability_ratio_spin = QDoubleSpinBox()
@@ -67,25 +100,28 @@ class AddRuleDialog(QDialog):
         self.liability_ratio_spin.setValue(0.0)
         layout.addRow("구상율 *:", self.liability_ratio_spin)
         
-        # Amount Cap Type
+        # Amount Cap Type (DEFAULT 'NONE', CHECK IN ('LABOR','OUTSOURCE_LABOR','BOTH_LABOR','NONE'))
         self.amount_cap_combo = QComboBox()
-        self.amount_cap_combo.addItems(["NONE", "FIXED", "PERCENTAGE"])
+        self.amount_cap_combo.addItems(["NONE", "LABOR", "OUTSOURCE_LABOR", "BOTH_LABOR"])
+        self.amount_cap_combo.setCurrentText("NONE")  # 기본값
         layout.addRow("금액 상한 타입 *:", self.amount_cap_combo)
         
-        # Amount Cap Value
+        # Amount Cap Value (NULL 허용)
         self.amount_cap_spin = QSpinBox()
         self.amount_cap_spin.setRange(0, 999999999)
         self.amount_cap_spin.setValue(0)
+        self.amount_cap_spin.setSpecialValueText("없음")
         layout.addRow("금액 상한 값:", self.amount_cap_spin)
         
-        # Exclude Project Code
-        self.exclude_project_code_edit = QLineEdit()
-        self.exclude_project_code_edit.setPlaceholderText("제외할 프로젝트 코드")
-        layout.addRow("제외 프로젝트 코드:", self.exclude_project_code_edit)
+        # Valid From (날짜 형식)
+        self.valid_from_edit = QLineEdit()
+        self.valid_from_edit.setPlaceholderText("YYYY-MM-DD (선택사항)")
+        layout.addRow("유효 시작일:", self.valid_from_edit)
         
-        # Note
-        self.note_edit = QLineEdit()
-        layout.addRow("비고:", self.note_edit)
+        # Valid To (날짜 형식)
+        self.valid_to_edit = QLineEdit()
+        self.valid_to_edit.setPlaceholderText("YYYY-MM-DD (선택사항)")
+        layout.addRow("유효 종료일:", self.valid_to_edit)
         
         # 버튼
         button_layout = QHBoxLayout()
@@ -104,51 +140,99 @@ class AddRuleDialog(QDialog):
             self._load_rule_data(rule_data)
     
     def _load_rule_data(self, rule_data: Dict[str, Any]):
-        """기존 룰 데이터로 폼 채우기"""
+        """기존 규칙 데이터로 폼 채우기"""
         if "priority" in rule_data:
             self.priority_spin.setValue(rule_data["priority"])
+        
         if "status" in rule_data:
             idx = self.status_combo.findText(rule_data["status"])
             if idx >= 0:
                 self.status_combo.setCurrentIndex(idx)
+        
         if "repair_region" in rule_data:
-            self.repair_region_edit.setText(str(rule_data["repair_region"]))
-        if "vehicle_classification" in rule_data:
-            self.vehicle_class_edit.setText(str(rule_data["vehicle_classification"]))
+            idx = self.repair_region_combo.findText(rule_data["repair_region"])
+            if idx >= 0:
+                self.repair_region_combo.setCurrentIndex(idx)
+        
         if "project_code" in rule_data:
             self.project_code_edit.setText(str(rule_data["project_code"]))
-        if "part_name" in rule_data:
-            self.part_name_edit.setText(str(rule_data["part_name"]))
+        
+        if "exclude_project_code" in rule_data:
+            self.exclude_project_code_edit.setText(str(rule_data["exclude_project_code"]))
+        
+        if "vehicle_classification" in rule_data:
+            self.vehicle_class_edit.setText(str(rule_data["vehicle_classification"]))
+        
         if "part_no" in rule_data:
             self.part_no_edit.setText(str(rule_data["part_no"]))
+        
+        if "part_name" in rule_data:
+            self.part_name_edit.setText(str(rule_data["part_name"]))
+        
+        if "engine_form" in rule_data:
+            self.engine_form_edit.setText(str(rule_data["engine_form"]))
+        
+        if "warranty_mileage_override" in rule_data and rule_data["warranty_mileage_override"]:
+            self.warranty_mileage_spin.setValue(int(rule_data["warranty_mileage_override"]))
+        
+        if "warranty_period_override" in rule_data and rule_data["warranty_period_override"]:
+            self.warranty_period_spin.setValue(int(rule_data["warranty_period_override"]))
+        
         if "liability_ratio" in rule_data:
             self.liability_ratio_spin.setValue(float(rule_data["liability_ratio"]))
+        
         if "amount_cap_type" in rule_data:
             idx = self.amount_cap_combo.findText(rule_data["amount_cap_type"])
             if idx >= 0:
                 self.amount_cap_combo.setCurrentIndex(idx)
+        
         if "amount_cap_value" in rule_data and rule_data["amount_cap_value"]:
             self.amount_cap_spin.setValue(int(rule_data["amount_cap_value"]))
-        if "exclude_project_code" in rule_data:
-            self.exclude_project_code_edit.setText(str(rule_data["exclude_project_code"]))
-        if "note" in rule_data:
-            self.note_edit.setText(str(rule_data["note"]))
+        
+        if "valid_from" in rule_data:
+            self.valid_from_edit.setText(str(rule_data["valid_from"]) if rule_data["valid_from"] else "")
+        
+        if "valid_to" in rule_data:
+            self.valid_to_edit.setText(str(rule_data["valid_to"]) if rule_data["valid_to"] else "")
     
     def get_data(self) -> Dict[str, Any]:
         """입력된 데이터 반환"""
+        # Priority: -1이면 None으로 전달 (트리거가 자동으로 채움)
+        priority = self.priority_spin.value()
+        if priority == -1:
+            priority = None
+        
+        # Warranty overrides: 0이면 None
+        warranty_mileage = self.warranty_mileage_spin.value()
+        if warranty_mileage == 0:
+            warranty_mileage = None
+        
+        warranty_period = self.warranty_period_spin.value()
+        if warranty_period == 0:
+            warranty_period = None
+        
+        # Amount cap value: 0이면 None
+        amount_cap_value = self.amount_cap_spin.value()
+        if amount_cap_value == 0:
+            amount_cap_value = None
+        
         return {
-            "priority": self.priority_spin.value(),
+            "priority": priority,
             "status": self.status_combo.currentText(),
-            "repair_region": self.repair_region_edit.text().strip(),
-            "vehicle_classification": self.vehicle_class_edit.text().strip(),
-            "project_code": self.project_code_edit.text().strip(),
-            "part_name": self.part_name_edit.text().strip(),
-            "part_no": self.part_no_edit.text().strip(),
+            "repair_region": self.repair_region_combo.currentText(),
+            "project_code": self.project_code_edit.text().strip() or "ALL",
+            "exclude_project_code": self.exclude_project_code_edit.text().strip() or None,
+            "vehicle_classification": self.vehicle_class_edit.text().strip() or "ALL",
+            "part_no": self.part_no_edit.text().strip() or "ALL",
+            "part_name": self.part_name_edit.text().strip() or "ALL",
+            "engine_form": self.engine_form_edit.text().strip() or "ALL",
+            "warranty_mileage_override": warranty_mileage,
+            "warranty_period_override": warranty_period,
             "liability_ratio": self.liability_ratio_spin.value(),
             "amount_cap_type": self.amount_cap_combo.currentText(),
-            "amount_cap_value": self.amount_cap_spin.value() if self.amount_cap_spin.value() > 0 else None,
-            "exclude_project_code": self.exclude_project_code_edit.text().strip(),
-            "note": self.note_edit.text().strip(),
+            "amount_cap_value": amount_cap_value,
+            "valid_from": self.valid_from_edit.text().strip() or None,
+            "valid_to": self.valid_to_edit.text().strip() or None,
         }
 
 
