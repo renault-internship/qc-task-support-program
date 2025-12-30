@@ -1,7 +1,16 @@
+# =========================
+# src/gui/models.py
+# =========================
 """
 Excel 데이터 모델
+- 병합 셀(merged cell) 표시값 채우기(방법 B): UI에서만 병합값이 아래로 계속 보이게
+- 병합 셀 편집은 좌상단(top-left)만 허용
+- 기존 기능(숫자/날짜 포맷, 구상율 컬럼만 편집, dirty 표시) 유지
 """
+from __future__ import annotations
+
 from datetime import datetime, date
+from typing import Dict, Tuple, Any
 
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 
@@ -12,18 +21,54 @@ class ExcelSheetModel(QAbstractTableModel):
     - dirty: UI에서 수정된 값(메모리상)
     - 표시 포맷: 숫자 콤마, 날짜 yyyy-mm-dd
     - 편집 제어:
-        * edit_all=True  -> 헤더(1행) 제외 전부 편집
-        * edit_all=False -> '구상율' 헤더 컬럼만 편집
+        * edit_all=True  -> 헤더(1행) 제외 전부 편집 (단, 병합셀은 좌상단만)
+        * edit_all=False -> '구상율' 헤더 컬럼만 편집 (단, 병합셀은 좌상단만)
+
+    - 병합 표시(방법 B):
+        * 병합 범위 내부 셀은 '좌상단 셀' 값을 보여줌(값 아래로 채워 보이게)
+        * 실제 ws 값은 절대 변경하지 않음 (export 시에도 그대로)
+        * 편집은 좌상단만 가능하게 막음(데이터 꼬임 방지)
     """
+
     def __init__(self, ws, parent=None):
         super().__init__(parent)
         self.ws = ws
         self.max_row = ws.max_row
         self.max_col = ws.max_column
 
-        self.dirty: dict[tuple[int, int], object] = {}
+        self.dirty: Dict[Tuple[int, int], Any] = {}
         self.edit_all: bool = False
         self.editable_cols: set[int] = self._find_chargeback_rate_cols()
+
+        # (r,c) -> (top_r, top_c) 병합 캐시
+        self._merge_top_left: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        # (top_r, top_c) -> (min_row, min_col, max_row, max_col) 병합 범위 캐시(최적화용)
+        self._merge_bounds_by_top: Dict[Tuple[int, int], Tuple[int, int, int, int]] = {}
+
+        self._build_merge_cache()
+
+    # ---------- 병합 캐시 ----------
+    def _build_merge_cache(self):
+        self._merge_top_left.clear()
+        self._merge_bounds_by_top.clear()
+
+        for mr in self.ws.merged_cells.ranges:
+            min_col, min_row, max_col, max_row = mr.bounds
+            top = (min_row, min_col)
+            self._merge_bounds_by_top[top] = (min_row, min_col, max_row, max_col)
+
+            for r in range(min_row, max_row + 1):
+                for c in range(min_col, max_col + 1):
+                    self._merge_top_left[(r, c)] = top
+
+    def _canonical_cell(self, r: int, c: int) -> Tuple[int, int]:
+        """병합셀 내부면 좌상단 좌표로, 아니면 자기 자신."""
+        return self._merge_top_left.get((r, c), (r, c))
+
+    def _is_merged_non_topleft(self, r: int, c: int) -> bool:
+        """병합 범위 안인데 좌상단이 아닌 셀인지"""
+        top = self._merge_top_left.get((r, c))
+        return (top is not None) and (top != (r, c))
 
     # ----- Qt 필수 -----
     def rowCount(self, parent=QModelIndex()):
@@ -39,18 +84,20 @@ class ExcelSheetModel(QAbstractTableModel):
         r = index.row() + 1
         c = index.column() + 1
 
-        v = self.dirty.get((r, c), self.ws.cell(row=r, column=c).value)
+        # 병합이면 좌상단 기준으로 값 조회(방법 B)
+        cr, cc = self._canonical_cell(r, c)
+
+        v = self.dirty.get((cr, cc), self.ws.cell(row=cr, column=cc).value)
 
         if role == Qt.EditRole:
-            # 편집기는 타입 보존(가능한 한)
             return "" if v is None else v
 
         if role == Qt.DisplayRole:
             return self._format_value(v)
 
         if role == Qt.BackgroundRole:
-            # 수정된 셀은 표시(엑셀 느낌)
-            if (r, c) in self.dirty:
+            # 수정된 셀 표시(병합이면 좌상단 기준)
+            if (cr, cc) in self.dirty:
                 from PySide6.QtGui import QBrush, QColor
                 return QBrush(QColor(255, 250, 205))  # 연노랑
             return None
@@ -65,8 +112,12 @@ class ExcelSheetModel(QAbstractTableModel):
         c = index.column() + 1
         base = Qt.ItemIsSelectable | Qt.ItemIsEnabled
 
-        # 보통 헤더 행(1행)은 편집 막는 게 안전
+        # 헤더 행(1행)은 편집 막기
         if r == 1:
+            return base
+
+        # 병합셀은 좌상단만 편집 가능
+        if self._is_merged_non_topleft(r, c):
             return base
 
         if self.edit_all:
@@ -85,16 +136,32 @@ class ExcelSheetModel(QAbstractTableModel):
         r = index.row() + 1
         c = index.column() + 1
 
-        # 편집 불가 셀 방어
         if r == 1:
             return False
-        if (not self.edit_all) and (c not in self.editable_cols):
+
+        # 병합셀 내부 클릭이면 좌상단으로 정규화
+        cr, cc = self._canonical_cell(r, c)
+
+        # 좌상단이 아닌 병합셀은 편집 막기
+        if self._is_merged_non_topleft(r, c):
+            return False
+
+        if not self.edit_all and (cc not in self.editable_cols):
             return False
 
         new_val = self._parse_user_input(value)
+        self.dirty[(cr, cc)] = new_val
 
-        self.dirty[(r, c)] = new_val
-        self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole, Qt.BackgroundRole])
+        # 병합 범위가 있으면 범위만 갱신(최소 갱신)
+        top = (cr, cc)
+        if top in self._merge_bounds_by_top:
+            min_row, min_col, max_row, max_col = self._merge_bounds_by_top[top]
+            tl = self.index(min_row - 1, min_col - 1)
+            br = self.index(max_row - 1, max_col - 1)
+            self.dataChanged.emit(tl, br, [Qt.DisplayRole, Qt.EditRole, Qt.BackgroundRole])
+        else:
+            self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole, Qt.BackgroundRole])
+
         return True
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
@@ -139,7 +206,6 @@ class ExcelSheetModel(QAbstractTableModel):
 
         raw = text.replace(",", "")
 
-        # 숫자 파싱 (int/float)
         try:
             if "." in raw:
                 return float(raw)
@@ -150,7 +216,6 @@ class ExcelSheetModel(QAbstractTableModel):
     def _find_chargeback_rate_cols(self) -> set[int]:
         """
         1행(헤더)에서 '구상'+'율' 포함 컬럼을 찾아 편집 가능 컬럼으로 등록
-        (파일마다 컬럼 위치가 다를 수 있어 탐지 기반으로 처리)
         """
         editable = set()
         header_row = 1
@@ -164,8 +229,10 @@ class ExcelSheetModel(QAbstractTableModel):
         return editable
 
     def apply_dirty_to_sheet(self):
+        """
+        dirty를 실제 ws에 반영
+        - 병합셀의 경우 dirty는 항상 좌상단 기준으로만 기록됨
+        """
         for (r, c), v in self.dirty.items():
             self.ws.cell(row=r, column=c).value = v
-        # 반영 후 dirty를 유지할지(되돌리기 위해) 정책 선택 가능
-        # 지금은 "화면 표시(수정 강조)"를 위해 유지
-
+        # dirty 유지(화면 표시/후속 반영용)
