@@ -270,56 +270,92 @@ class ViewRulesDialog(QDialog):
         self.setLayout(layout)
     
     def format_rule_changes(self, rule: Dict[str, Any]) -> str:
-        """Rule의 변경점만 포맷팅하여 반환"""
+        """Rule의 변경점만 포맷팅하여 반환 (NULL, "ALL", "NONE" 제외)"""
         changes = []
         
-        # 프로젝트 코드
-        project_code = rule.get("project_code", "").strip()
+        # 수리 지역 (ALL이 아닐 때만)
+        repair_region = rule.get("repair_region")
+        if repair_region and str(repair_region).strip().upper() != "ALL":
+            changes.append(f"수리지역: {repair_region}")
+        
+        # 프로젝트 코드 (ALL이 아닐 때만)
+        project_code = rule.get("project_code")
         if project_code:
-            changes.append(f"프로젝트: {project_code}")
+            project_code = str(project_code).strip()
+            if project_code and project_code.upper() != "ALL":
+                changes.append(f"프로젝트: {project_code}")
         
-        # 부품명
-        part_name = rule.get("part_name", "").strip()
-        if part_name:
-            changes.append(f"부품: {part_name}")
-        
-        # 부품 번호
-        part_no = rule.get("part_no", "").strip()
-        if part_no:
-            changes.append(f"부품번호: {part_no}")
-        
-        # 제외 프로젝트
-        exclude_project = rule.get("exclude_project_code", "").strip()
+        # 제외 프로젝트 (NULL이 아닐 때만)
+        exclude_project = rule.get("exclude_project_code")
         if exclude_project:
-            changes.append(f"제외: {exclude_project}")
+            exclude_project = str(exclude_project).strip()
+            if exclude_project:
+                changes.append(f"제외: {exclude_project}")
+        
+        # 차계 (ALL이 아닐 때만)
+        vehicle_classification = rule.get("vehicle_classification")
+        if vehicle_classification:
+            vehicle_classification = str(vehicle_classification).strip()
+            if vehicle_classification and vehicle_classification.upper() != "ALL":
+                changes.append(f"차계: {vehicle_classification}")
+        
+        # 부품명 (ALL이 아닐 때만)
+        part_name = rule.get("part_name")
+        if part_name:
+            part_name = str(part_name).strip()
+            if part_name and part_name.upper() != "ALL":
+                changes.append(f"부품: {part_name}")
+        
+        # 부품 번호 (ALL이 아닐 때만)
+        part_no = rule.get("part_no")
+        if part_no:
+            part_no = str(part_no).strip()
+            if part_no and part_no.upper() != "ALL":
+                changes.append(f"부품번호: {part_no}")
+        
+        # 엔진 형식 (ALL이 아닐 때만)
+        engine_form = rule.get("engine_form")
+        if engine_form:
+            engine_form = str(engine_form).strip()
+            if engine_form and engine_form.upper() != "ALL":
+                changes.append(f"엔진: {engine_form}")
         
         # 구상율 (항상 표시)
-        liability_ratio = rule.get("liability_ratio", 0)
+        liability_ratio = rule.get("liability_ratio")
         if liability_ratio is not None:
             changes.append(f"구상율: {liability_ratio}%")
         
-        # 보증 주행거리 오버라이드
+        # 보증 주행거리 오버라이드 (NULL이 아닐 때만)
         warranty_mileage = rule.get("warranty_mileage_override")
-        if warranty_mileage:
+        if warranty_mileage is not None:
             changes.append(f"주행거리: {warranty_mileage}km")
         
-        # 보증 기간 오버라이드
+        # 보증 기간 오버라이드 (NULL이 아닐 때만)
         warranty_period = rule.get("warranty_period_override")
-        if warranty_period:
+        if warranty_period is not None:
             years = warranty_period / 365.0
             changes.append(f"보증기간: {years:.1f}년")
         
-        # 금액 상한
+        # 금액 상한 (NULL이 아니고 NONE이 아닐 때만)
         amount_cap_value = rule.get("amount_cap_value")
-        if amount_cap_value:
+        if amount_cap_value is not None:
             cap_type = rule.get("amount_cap_type", "NONE")
-            if cap_type != "NONE":
+            if cap_type and str(cap_type).strip().upper() != "NONE":
                 changes.append(f"상한: {amount_cap_value} ({cap_type})")
         
-        # 비고
-        note = rule.get("note", "").strip()
-        if note:
-            changes.append(f"비고: {note}")
+        # 적용 시작일 (NULL이 아닐 때만)
+        valid_from = rule.get("valid_from")
+        if valid_from:
+            valid_from = str(valid_from).strip()
+            if valid_from:
+                changes.append(f"시작일: {valid_from}")
+        
+        # 적용 종료일 (NULL이 아닐 때만)
+        valid_to = rule.get("valid_to")
+        if valid_to:
+            valid_to = str(valid_to).strip()
+            if valid_to:
+                changes.append(f"종료일: {valid_to}")
         
         return " | ".join(changes) if changes else "기본 규칙"
     
