@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from src.database import (
     get_all_companies, get_all_companies_with_code, get_company_info, 
     get_rules_from_table, add_rule_to_table, update_rule_in_table, 
-    delete_rule_from_table, upsert_company
+    delete_rule_from_table, upsert_company, update_company_remark
 )
 from src.gui.dialogs import AddRuleDialog
 
@@ -84,26 +84,49 @@ class AddCompanyDialog(QDialog):
 
 
 class RuleManagementWidget(QWidget):
-    """룰 관리 위젯 (선택한 협력사의 룰 추가/수정/삭제)"""
+    """규칙 관리 위젯 (선택한 협력사의 규칙 추가/수정/삭제)"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_company: Optional[str] = None
         self.current_rule_table: Optional[str] = None
+        self.current_sap_code: Optional[str] = None
+        self.original_remark: str = ""  # 원본 remark 저장
         self.rules: List[Dict[str, Any]] = []
         
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         
         # 제목
-        from PySide6.QtWidgets import QLabel
+        from PySide6.QtWidgets import QLabel, QGroupBox, QTextEdit
         self.title_label = QLabel("협력사를 선택하세요")
         self.title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(self.title_label)
         
+        # 상단: Remark 영역
+        remark_group = QGroupBox("Remark")
+        remark_layout = QVBoxLayout()
+        self.remark_text = QTextEdit()
+        self.remark_text.setReadOnly(False)  # 편집 가능
+        self.remark_text.setMaximumHeight(100)
+        remark_layout.addWidget(self.remark_text)
+        
+        # Remark 저장 버튼
+        remark_button_layout = QHBoxLayout()
+        remark_button_layout.addStretch()
+        self.btn_save_remark = QPushButton("저장")
+        self.btn_save_remark.setEnabled(False)
+        remark_button_layout.addWidget(self.btn_save_remark)
+        remark_layout.addLayout(remark_button_layout)
+        
+        remark_group.setLayout(remark_layout)
+        layout.addWidget(remark_group)
+        
         # 버튼들
         button_layout = QHBoxLayout()
-        self.btn_add_rule = QPushButton("+ 룰 추가")
-        self.btn_edit_rule = QPushButton("룰 수정")
-        self.btn_delete_rule = QPushButton("룰 삭제")
+        self.btn_add_rule = QPushButton("+ 규칙 추가")
+        self.btn_edit_rule = QPushButton("규칙 수정")
+        self.btn_delete_rule = QPushButton("규칙 삭제")
         self.btn_add_rule.setEnabled(False)
         self.btn_edit_rule.setEnabled(False)
         self.btn_delete_rule.setEnabled(False)
@@ -114,15 +137,17 @@ class RuleManagementWidget(QWidget):
         button_layout.addStretch()
         layout.addLayout(button_layout)
         
-        # 룰 목록 테이블
+        # 하단: Rule 테이블 전체 출력
+        rule_group = QGroupBox("규칙 테이블")
+        rule_layout = QVBoxLayout()
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["우선순위", "상태", "수리지역", "변경점"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
-        layout.addWidget(self.table, 1)
+        rule_layout.addWidget(self.table)
+        rule_group.setLayout(rule_layout)
+        layout.addWidget(rule_group, 1)
         
         self.setLayout(layout)
         
@@ -131,9 +156,11 @@ class RuleManagementWidget(QWidget):
         self.btn_edit_rule.clicked.connect(self.on_edit_rule)
         self.btn_delete_rule.clicked.connect(self.on_delete_rule)
         self.table.itemSelectionChanged.connect(self.on_selection_changed)
+        self.btn_save_remark.clicked.connect(self.on_save_remark)
+        self.remark_text.textChanged.connect(self.on_remark_changed)
     
     def set_company(self, company_name: str):
-        """협력사 설정 및 룰 로드"""
+        """협력사 설정 및 규칙 로드"""
         self.current_company = company_name
         company_info = get_company_info(company_name)
         
@@ -141,11 +168,19 @@ class RuleManagementWidget(QWidget):
             self.title_label.setText(f"오류: {company_name} 정보를 찾을 수 없습니다")
             self.current_rule_table = None
             self.rules = []
+            self.remark_text.clear()
             self.refresh_table()
             return
         
         self.current_rule_table = company_info.get("rule_table_name")
-        self.title_label.setText(f"룰 관리 - {company_name} ({self.current_rule_table or '테이블 없음'})")
+        self.title_label.setText(f"규칙 관리 - {company_name} ({self.current_rule_table or '테이블 없음'})")
+        
+        # Remark 표시
+        remark = company_info.get("remark", "")
+        self.original_remark = remark if remark else ""
+        self.remark_text.setText(self.original_remark)
+        self.current_sap_code = company_info.get("sap_code")
+        self.btn_save_remark.setEnabled(False)  # 초기에는 저장 버튼 비활성화
         
         if self.current_rule_table:
             self.rules = get_rules_from_table(self.current_rule_table)
@@ -156,33 +191,68 @@ class RuleManagementWidget(QWidget):
         self.btn_add_rule.setEnabled(self.current_rule_table is not None)
     
     def refresh_table(self):
-        """테이블 새로고침"""
+        """테이블 새로고침 (rule 테이블 전체 컬럼 출력)"""
+        if not self.rules:
+            self.table.setRowCount(0)
+            self.table.setColumnCount(0)
+            return
+        
+        # 모든 컬럼 가져오기
+        all_columns = set()
+        for rule in self.rules:
+            all_columns.update(rule.keys())
+        
+        # 컬럼 순서 정렬 (rule_id, priority, status 등을 앞에)
+        column_order = ["rule_id", "priority", "status", "repair_region", "vehicle_classification",
+                       "project_code", "part_name", "part_no", "exclude_project_code",
+                       "liability_ratio", "amount_cap_type", "amount_cap_value",
+                       "warranty_mileage_override", "warranty_period_override",
+                       "valid_from", "valid_to", "engine_form",
+                       "created_at", "updated_at"]
+        
+        # 순서가 정해진 컬럼 먼저, 나머지는 알파벳 순
+        ordered_columns = []
+        for col in column_order:
+            if col in all_columns:
+                ordered_columns.append(col)
+                all_columns.remove(col)
+        
+        ordered_columns.extend(sorted(all_columns))
+        
+        # 테이블 설정
+        self.table.setColumnCount(len(ordered_columns))
+        self.table.setHorizontalHeaderLabels(ordered_columns)
         self.table.setRowCount(len(self.rules))
         
+        # 데이터 채우기
         for row, rule in enumerate(self.rules):
-            # 우선순위
-            priority_item = QTableWidgetItem(str(rule.get("priority", "")))
-            priority_item.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, 0, priority_item)
-            
-            # 상태
-            status = rule.get("status", "")
-            status_item = QTableWidgetItem(status)
-            status_item.setTextAlignment(Qt.AlignCenter)
-            if status.upper() == "ACTIVE":
-                status_item.setForeground(Qt.GlobalColor.green)
-            elif status.upper() == "INACTIVE":
-                status_item.setForeground(Qt.GlobalColor.gray)
-            self.table.setItem(row, 1, status_item)
-            
-            # 수리지역
-            region_item = QTableWidgetItem(rule.get("repair_region", ""))
-            self.table.setItem(row, 2, region_item)
-            
-            # 변경점
-            changes = self.format_rule_changes(rule)
-            changes_item = QTableWidgetItem(changes)
-            self.table.setItem(row, 3, changes_item)
+            for col_idx, col_name in enumerate(ordered_columns):
+                value = rule.get(col_name)
+                
+                if value is None:
+                    item = QTableWidgetItem("")
+                elif isinstance(value, (int, float)):
+                    item = QTableWidgetItem(str(value))
+                elif isinstance(value, bool):
+                    item = QTableWidgetItem("TRUE" if value else "FALSE")
+                else:
+                    item = QTableWidgetItem(str(value))
+                
+                # 상태 컬럼은 색상 표시
+                if col_name == "status":
+                    status = str(value).upper()
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if status == "ACTIVE":
+                        item.setForeground(Qt.GlobalColor.green)
+                    elif status == "INACTIVE":
+                        item.setForeground(Qt.GlobalColor.gray)
+                
+                # 숫자 컬럼은 우측 정렬
+                if col_name in ["rule_id", "priority", "liability_ratio", "amount_cap_value",
+                               "warranty_mileage_override", "warranty_period_override"]:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                
+                self.table.setItem(row, col_idx, item)
         
         self.table.resizeColumnsToContents()
     
@@ -211,7 +281,7 @@ class RuleManagementWidget(QWidget):
         self.btn_delete_rule.setEnabled(has_selection and self.current_rule_table is not None)
     
     def on_add_rule(self):
-        """룰 추가"""
+        """규칙 추가"""
         if not self.current_rule_table:
             QMessageBox.warning(self, "오류", "Rule 테이블이 없습니다.")
             return
@@ -223,7 +293,7 @@ class RuleManagementWidget(QWidget):
             try:
                 rule_id = add_rule_to_table(
                     rule_table_name=self.current_rule_table,
-                    priority=data["priority"],
+                    priority=data.get("priority"),
                     status=data["status"],
                     repair_region=data["repair_region"],
                     vehicle_classification=data["vehicle_classification"],
@@ -232,18 +302,22 @@ class RuleManagementWidget(QWidget):
                     project_code=data["project_code"],
                     part_name=data["part_name"],
                     part_no=data["part_no"],
-                    exclude_project_code=data["exclude_project_code"],
-                    amount_cap_value=data["amount_cap_value"],
-                    note=data["note"],
+                    engine_form=data.get("engine_form", "ALL"),
+                    exclude_project_code=data.get("exclude_project_code"),
+                    warranty_mileage_override=data.get("warranty_mileage_override"),
+                    warranty_period_override=data.get("warranty_period_override"),
+                    amount_cap_value=data.get("amount_cap_value"),
+                    valid_from=data.get("valid_from"),
+                    valid_to=data.get("valid_to"),
                 )
                 
-                QMessageBox.information(self, "완료", f"룰이 추가되었습니다. (ID: {rule_id})")
+                QMessageBox.information(self, "완료", f"규칙이 추가되었습니다. (ID: {rule_id})")
                 self.set_company(self.current_company)  # 새로고침
             except Exception as e:
-                QMessageBox.critical(self, "오류", f"룰 추가 실패: {str(e)}")
+                QMessageBox.critical(self, "오류", f"규칙 추가 실패: {str(e)}")
     
     def on_edit_rule(self):
-        """룰 수정"""
+        """규칙 수정"""
         selected_items = self.table.selectedItems()
         if not selected_items:
             return
@@ -256,7 +330,7 @@ class RuleManagementWidget(QWidget):
         rule_id = rule.get("rule_id")
         
         if not rule_id:
-            QMessageBox.warning(self, "오류", "룰 ID를 찾을 수 없습니다.")
+            QMessageBox.warning(self, "오류", "규칙 ID를 찾을 수 없습니다.")
             return
         
         if not self.current_rule_table:
@@ -281,21 +355,25 @@ class RuleManagementWidget(QWidget):
                     project_code=data.get("project_code"),
                     part_name=data.get("part_name"),
                     part_no=data.get("part_no"),
+                    engine_form=data.get("engine_form"),
                     exclude_project_code=data.get("exclude_project_code"),
+                    warranty_mileage_override=data.get("warranty_mileage_override"),
+                    warranty_period_override=data.get("warranty_period_override"),
                     amount_cap_value=data.get("amount_cap_value"),
-                    note=data.get("note"),
+                    valid_from=data.get("valid_from"),
+                    valid_to=data.get("valid_to"),
                 )
                 
                 if success:
-                    QMessageBox.information(self, "완료", "룰이 수정되었습니다.")
+                    QMessageBox.information(self, "완료", "규칙이 수정되었습니다.")
                     self.set_company(self.current_company)  # 새로고침
                 else:
-                    QMessageBox.warning(self, "오류", "룰 수정에 실패했습니다.")
+                    QMessageBox.warning(self, "오류", "규칙 수정에 실패했습니다.")
             except Exception as e:
-                QMessageBox.critical(self, "오류", f"룰 수정 실패: {str(e)}")
+                QMessageBox.critical(self, "오류", f"규칙 수정 실패: {str(e)}")
     
     def on_delete_rule(self):
-        """룰 삭제"""
+        """규칙 삭제"""
         selected_items = self.table.selectedItems()
         if not selected_items:
             return
@@ -308,12 +386,12 @@ class RuleManagementWidget(QWidget):
         rule_id = rule.get("rule_id")
         
         if not rule_id:
-            QMessageBox.warning(self, "오류", "룰 ID를 찾을 수 없습니다.")
+            QMessageBox.warning(self, "오류", "규칙 ID를 찾을 수 없습니다.")
             return
         
         reply = QMessageBox.question(
             self, "확인", 
-            f"이 룰을 삭제하시겠습니까?\n(우선순위: {rule.get('priority')}, 상태: {rule.get('status')})",
+            f"이 규칙을 삭제하시겠습니까?\n(우선순위: {rule.get('priority')}, 상태: {rule.get('status')})",
             QMessageBox.Yes | QMessageBox.No
         )
         
@@ -321,12 +399,39 @@ class RuleManagementWidget(QWidget):
             try:
                 success = delete_rule_from_table(self.current_rule_table, rule_id)
                 if success:
-                    QMessageBox.information(self, "완료", "룰이 삭제되었습니다.")
+                    QMessageBox.information(self, "완료", "규칙이 삭제되었습니다.")
                     self.set_company(self.current_company)  # 새로고침
                 else:
-                    QMessageBox.warning(self, "오류", "룰 삭제에 실패했습니다.")
+                    QMessageBox.warning(self, "오류", "규칙 삭제에 실패했습니다.")
             except Exception as e:
-                QMessageBox.critical(self, "오류", f"룰 삭제 실패: {str(e)}")
+                QMessageBox.critical(self, "오류", f"규칙 삭제 실패: {str(e)}")
+    
+    def on_remark_changed(self):
+        """Remark 텍스트 변경 시 저장 버튼 활성화"""
+        current_text = self.remark_text.toPlainText()
+        if current_text != self.original_remark:
+            self.btn_save_remark.setEnabled(True)
+        else:
+            self.btn_save_remark.setEnabled(False)
+    
+    def on_save_remark(self):
+        """Remark 저장"""
+        if not self.current_sap_code:
+            QMessageBox.warning(self, "오류", "협력사 정보를 찾을 수 없습니다.")
+            return
+        
+        new_remark = self.remark_text.toPlainText()
+        
+        try:
+            success = update_company_remark(self.current_sap_code, new_remark)
+            if success:
+                self.original_remark = new_remark
+                self.btn_save_remark.setEnabled(False)
+                QMessageBox.information(self, "완료", "Remark가 저장되었습니다.")
+            else:
+                QMessageBox.warning(self, "오류", "Remark 저장에 실패했습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"Remark 저장 실패: {str(e)}")
 
 
 class ComExManagementPageWidget(QWidget):
@@ -369,7 +474,7 @@ class ComExManagementPageWidget(QWidget):
         left_widget.setLayout(left_panel)
         layout.addWidget(left_widget)
         
-        # 오른쪽: 룰 관리 위젯
+        # 오른쪽: 규칙 관리 위젯
         self.rule_management = RuleManagementWidget(self)
         layout.addWidget(self.rule_management, 1)
         
