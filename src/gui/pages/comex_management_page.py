@@ -11,9 +11,9 @@ from PySide6.QtWidgets import (
 )
 
 from src.database import (
-    get_all_companies, get_company_info, get_rules_from_table,
-    add_rule_to_table, update_rule_in_table, delete_rule_from_table,
-    upsert_company
+    get_all_companies, get_all_companies_with_code, get_company_info, 
+    get_rules_from_table, add_rule_to_table, update_rule_in_table, 
+    delete_rule_from_table, upsert_company
 )
 from src.gui.dialogs import AddRuleDialog
 
@@ -334,6 +334,8 @@ class ComExManagementPageWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         
+        self.company_data = {}  # sap_name -> {sap_code, sap_name} 매핑
+        
         layout = QHBoxLayout()
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(8)
@@ -346,9 +348,7 @@ class ComExManagementPageWidget(QWidget):
         # 버튼들
         button_layout = QHBoxLayout()
         self.btn_add_company = QPushButton("+ 협력사 추가")
-        self.btn_rule_manage = QPushButton("룰 관리")
         button_layout.addWidget(self.btn_add_company)
-        button_layout.addWidget(self.btn_rule_manage)
         left_panel.addLayout(button_layout)
         
         # 검색
@@ -384,24 +384,50 @@ class ComExManagementPageWidget(QWidget):
         self.load_companies()
     
     def load_companies(self):
-        """협력사 목록 로드"""
+        """협력사 목록 로드 (sap_code와 sap_name 저장)"""
         self.company_list.clear()
-        companies = get_all_companies()
+        self.company_data = {}  # sap_name -> {sap_code, sap_name} 매핑
+        
+        companies = get_all_companies_with_code()
         
         for company in companies:
-            item = QListWidgetItem(company)
+            sap_name = company["sap_name"]
+            sap_code = company["sap_code"]
+            
+            # 표시는 sap_name으로, 데이터는 모두 저장
+            item = QListWidgetItem(sap_name)
             self.company_list.addItem(item)
+            self.company_data[sap_name] = {"sap_code": sap_code, "sap_name": sap_name}
         
         # 검색 필터 적용
         self.on_search_changed(self.search_edit.text())
     
     def on_search_changed(self, text: str):
-        """검색어 변경 시 필터링"""
+        """검색어 변경 시 필터링 (대소문자 구분 없이, sap_code와 sap_name 모두 검색)"""
         search_text = text.strip().lower()
+        
+        if not search_text:
+            # 검색어가 없으면 모두 표시
+            for i in range(self.company_list.count()):
+                self.company_list.item(i).setHidden(False)
+            return
         
         for i in range(self.company_list.count()):
             item = self.company_list.item(i)
-            item.setHidden(bool(search_text and search_text not in item.text().lower()))
+            sap_name = item.text()
+            company_info = self.company_data.get(sap_name, {})
+            sap_code = company_info.get("sap_code", "")
+            
+            # sap_name과 sap_code 모두 검색 (대소문자 구분 없음)
+            sap_name_lower = sap_name.lower()
+            sap_code_lower = sap_code.lower()
+            
+            matches = (
+                search_text in sap_name_lower or 
+                search_text in sap_code_lower
+            )
+            
+            item.setHidden(not matches)
     
     def on_add_company(self):
         """협력사 추가"""
