@@ -143,7 +143,7 @@ class MainPageWidget(QWidget):
         self._refresh_editable_label()
     
     def add_rule(self):
-        """Rule 추가 다이얼로그 열기"""
+        """규칙 추가 다이얼로그 열기"""
         # 기업이 선택되어 있는지 확인
         company_name = self.control_panel.get_company_combo().currentText()
         if company_name == "선택" or not company_name:
@@ -193,12 +193,12 @@ class MainPageWidget(QWidget):
                     note=data["note"],
                 )
                 
-                QMessageBox.information(self, "완료", f"Rule이 추가되었습니다. (ID: {rule_id})")
+                QMessageBox.information(self, "완료", f"규칙이 추가되었습니다. (ID: {rule_id})")
                 
                 # 정보 패널 업데이트 (rule 개수 갱신)
                 self._on_company_changed(company_name)
             except Exception as e:
-                QMessageBox.critical(self, "오류", f"Rule 추가 실패: {str(e)}")
+                QMessageBox.critical(self, "오류", f"규칙 추가 실패: {str(e)}")
     
     def show_rules_dialog(self, event):
         """Rule 목록 다이얼로그 표시"""

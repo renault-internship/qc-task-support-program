@@ -4,7 +4,8 @@ DB 스키마 마이그레이션 도구 - 독립 실행
 
 변경 사항:
 1. sap 테이블에 remark 컬럼 추가
-2. rule_* 테이블들에서 note 컬럼 삭제
+2. sap 테이블에 renault_code 컬럼 추가
+3. rule_* 테이블들에서 note 컬럼 삭제
 """
 import sys
 import re
@@ -70,6 +71,28 @@ def add_remark_to_sap():
         conn.commit()
         conn.close()
         return "sap 테이블에 remark 컬럼이 추가되었습니다."
+    except sqlite3.OperationalError as e:
+        conn.close()
+        raise Exception(f"sap 테이블 컬럼 추가 실패: {str(e)}")
+
+
+def add_renault_code_to_sap():
+    """sap 테이블에 renault_code 컬럼 추가"""
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    
+    try:
+        # 이미 존재하는지 확인
+        columns = get_table_columns("sap")
+        if "renault_code" in columns:
+            conn.close()
+            return "sap 테이블에 renault_code 컬럼이 이미 존재합니다."
+        
+        # 컬럼 추가
+        cursor.execute("ALTER TABLE sap ADD COLUMN renault_code TEXT DEFAULT ''")
+        conn.commit()
+        conn.close()
+        return "sap 테이블에 renault_code 컬럼이 추가되었습니다."
     except sqlite3.OperationalError as e:
         conn.close()
         raise Exception(f"sap 테이블 컬럼 추가 실패: {str(e)}")
@@ -182,7 +205,8 @@ class SchemaMigrationWindow(QWidget):
         info_label = QLabel(
             "변경 사항:\n"
             "1. sap 테이블에 remark 컬럼 추가\n"
-            "2. rule_* 테이블들에서 note 컬럼 삭제"
+            "2. sap 테이블에 renault_code 컬럼 추가\n"
+            "3. rule_* 테이블들에서 note 컬럼 삭제"
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -242,9 +266,15 @@ class SchemaMigrationWindow(QWidget):
             result = add_remark_to_sap()
             self.log(result)
             
-            # 2. rule_* 테이블들에서 note 삭제
+            # 2. sap 테이블에 renault_code 추가
             self.log("=" * 50)
-            self.log("2. rule_* 테이블들에서 note 컬럼 삭제 중...")
+            self.log("2. sap 테이블에 renault_code 컬럼 추가 중...")
+            result = add_renault_code_to_sap()
+            self.log(result)
+            
+            # 3. rule_* 테이블들에서 note 삭제
+            self.log("=" * 50)
+            self.log("3. rule_* 테이블들에서 note 컬럼 삭제 중...")
             
             rule_tables = get_all_rule_tables()
             if not rule_tables:

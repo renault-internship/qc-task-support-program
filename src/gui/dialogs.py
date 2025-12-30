@@ -19,7 +19,7 @@ class AddRuleDialog(QDialog):
         self.rule_data = rule_data
         self.is_edit_mode = rule_data is not None
         
-        title = f"Rule 수정 - {rule_table_name}" if self.is_edit_mode else f"Rule 추가 - {rule_table_name}"
+        title = f"규칙 수정 - {rule_table_name}" if self.is_edit_mode else f"규칙 추가 - {rule_table_name}"
         self.setWindowTitle(title)
         self.setFixedSize(500, 600)
         
@@ -104,7 +104,7 @@ class AddRuleDialog(QDialog):
             self._load_rule_data(rule_data)
     
     def _load_rule_data(self, rule_data: Dict[str, Any]):
-        """기존 룰 데이터로 폼 채우기"""
+        """기존 규칙 데이터로 폼 채우기"""
         if "priority" in rule_data:
             self.priority_spin.setValue(rule_data["priority"])
         if "status" in rule_data:
