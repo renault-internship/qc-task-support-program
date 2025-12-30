@@ -22,9 +22,9 @@ class InfoPanel(QWidget):
         self.lbl_remark = QLabel("-")
         self.lbl_editable = QLabel("-")
         
-        # Rule 추가 버튼
-        self.btn_add_rule = QPushButton("+ Rule 추가")
-        self.btn_add_rule.setToolTip("Rule 추가")
+        # 규칙 추가 버튼
+        self.btn_add_rule = QPushButton("+ 규칙 추가")
+        self.btn_add_rule.setToolTip("규칙 추가")
 
         for lbl in (self.lbl_company, self.lbl_remark, self.lbl_editable):
             lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -55,7 +55,7 @@ class InfoPanel(QWidget):
         self.lbl_editable.setText(text)
     
     def get_add_rule_button(self) -> QPushButton:
-        """Rule 추가 버튼 반환"""
+        """규칙 추가 버튼 반환"""
         return self.btn_add_rule
     
     def get_editable_label(self) -> QLabel:

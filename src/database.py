@@ -59,6 +59,8 @@ def get_company_info(sap_code_or_name: str) -> Optional[Dict[str, Any]]:
             "warranty_mileage": data.get("warranty_mileage"),
             "warranty_period": data.get("warranty_period"),
             "rule_table_name": data.get("rule_table_name"),
+            "remark": data.get("remark", ""),  # remark 추가
+            "renault_code": data.get("renault_code", ""),  # renault_code 추가
             "sheet_index": 0,  # 기본값 (sap 테이블에 없음)
             "header_row": 3,   # 기본값
             "data_start_row": 4,  # 기본값
@@ -184,6 +186,35 @@ def upsert_company(sap_code: str, sap_name: str = None, warranty_mileage: int = 
     
     conn.commit()
     conn.close()
+
+
+def update_company_remark(sap_code: str, remark: str) -> bool:
+    """
+    SAP 기업의 remark 업데이트
+    
+    Args:
+        sap_code: SAP 코드
+        remark: remark 내용
+        
+    Returns:
+        성공 여부
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE sap 
+            SET remark = ?, updated_at = DATETIME('now', 'localtime')
+            WHERE sap_code = ?
+        """, (remark, sap_code))
+        
+        conn.commit()
+        conn.close()
+        return cursor.rowcount > 0
+    except sqlite3.OperationalError as e:
+        conn.close()
+        raise ValueError(f"Remark 업데이트 실패: {str(e)}")
 
 
 def add_rule_to_table(
