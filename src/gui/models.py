@@ -93,7 +93,9 @@ class ExcelSheetModel(QAbstractTableModel):
             return "" if v is None else v
 
         if role == Qt.DisplayRole:
-            return self._format_value(v)
+            # 수식이면 표시용으로 계산값을 보여주고, 아니면 원래 값 표시
+            v_display = self._display_value(v, r=cr, c=cc)
+            return self._format_value(v_display)
 
         if role == Qt.BackgroundRole:
             # 수정된 셀 표시(병합이면 좌상단 기준)
@@ -236,3 +238,74 @@ class ExcelSheetModel(QAbstractTableModel):
         for (r, c), v in self.dirty.items():
             self.ws.cell(row=r, column=c).value = v
         # dirty 유지(화면 표시/후속 반영용)
+    def _display_value(self, v: Any, r: int, c: int) -> Any:
+        """
+        UI 표시용:
+        - 값이 수식("=...")이면 계산 가능한 범위에서 숫자로 보여줌
+        - 계산 못하면 원문 수식 그대로 보여줌
+        """
+        if not isinstance(v, str):
+            return v
+        s = v.strip()
+        if not s.startswith("="):
+            return v
+
+        # 1) 아주 흔한 패턴: =T4*(U4/100)
+        try:
+            return self._eval_simple_mul_div(s)
+        except Exception:
+            return v
+
+    def _eval_simple_mul_div(self, formula: str) -> float:
+        """
+        지원 범위: =A1*(B1/100) 또는 =A1*(B1/100.0) 비슷한 단순 산술
+        """
+        import re
+
+        # 예: =T4*(U4/100)
+        m = re.fullmatch(r"=\s*([A-Z]{1,3}\d+)\s*\*\s*\(\s*([A-Z]{1,3}\d+)\s*/\s*(\d+(\.\d+)?)\s*\)\s*", formula, re.IGNORECASE)
+        if not m:
+            raise ValueError("not supported")
+
+        a_addr = m.group(1).upper()
+        b_addr = m.group(2).upper()
+        denom = float(m.group(3))
+
+        a = self._read_number(a_addr)
+        b = self._read_number(b_addr)
+        return a * (b / denom)
+
+    def _read_number(self, addr: str) -> float:
+        """
+        셀 주소(A1) -> 숫자값 읽기
+        - 문자열 숫자("55,310")도 처리
+        - 비어있으면 0
+        """
+        import re
+        mm = re.fullmatch(r"([A-Z]{1,3})(\d+)", addr)
+        if not mm:
+            return 0.0
+
+        col_letters = mm.group(1)
+        row = int(mm.group(2))
+
+        col = 0
+        for ch in col_letters:
+            col = col * 26 + (ord(ch) - 64)
+
+        # 병합이면 좌상단으로 정규화
+        row, col = self._canonical_cell(row, col)
+
+        vv = self.dirty.get((row, col), self.ws.cell(row=row, column=col).value)
+
+        if vv is None:
+            return 0.0
+        if isinstance(vv, (int, float)):
+            return float(vv)
+        if isinstance(vv, str):
+            t = vv.strip().replace(",", "")
+            try:
+                return float(t)
+            except Exception:
+                return 0.0
+        return 0.0
