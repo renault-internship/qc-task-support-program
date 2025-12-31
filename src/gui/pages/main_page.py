@@ -116,11 +116,14 @@ class MainPageWidget(QWidget):
         if name and name != "선택":
             company_info = get_company_info(name)
             if company_info:
-                # self.info_panel.set_company(name)
-                # 🔹🔹🔹 여기 추가 🔹🔹🔹
+
+                # 회사명 + 코드 추가
+                company_name = company_info.get("sap_name", "협력사")
+                company_code = company_info.get("sap_code", "협력사코드")
+                self.info_panel.set_company_info(company_name, company_code)
+
                 remark = company_info.get("remark", "-")
                 self.info_panel.set_remark(remark)
-                # 🔹🔹🔹🔹🔹🔹🔹🔹🔹🔹🔹🔹
                 
                 # rule_table_name 가져오기
                 rule_table_name = company_info.get("rule_table_name")
@@ -138,11 +141,11 @@ class MainPageWidget(QWidget):
 
                 self.current_company_info = company_info
             else:
-                # self.info_panel.set_company("-")
+                self.info_panel.set_company_info("협력사", "협력사코드")
                 self.info_panel.set_editable("-")
                 self.current_company_info = None
         else:
-            # self.info_panel.set_company("-")
+            self.info_panel.set_company_info("협력사", "협력사코드")
             self.info_panel.set_editable("-")
             self.current_company_info = None
 

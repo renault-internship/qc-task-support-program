@@ -1,10 +1,7 @@
-"""
-정보 패널 컨테이너 - 비고 + Rule 링크
-"""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QLabel, QFrame
+    QGroupBox, QLabel
 )
 
 
@@ -12,20 +9,39 @@ class InfoPanel(QWidget):
     """정보 패널 컨테이너"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        
-        outer_layout = QVBoxLayout()
+
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # ===== GroupBox =====
         info_group = QGroupBox("정보")
 
-        # ===== 메인 가로 레이아웃 =====
         main_layout = QHBoxLayout()
-        main_layout.setSpacing(20)   # 좌/우 영역 간격
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(12, 8, 12, 8)
 
-        # ---------------- Rule 영역 (왼쪽) ----------------
-        self.lbl_rule_title = QLabel("변경가능(rule)")
-        self.lbl_rule_title.setStyleSheet("""
+
+        # ================= Rule 카드 =================
+        rule_card = QWidget()
+        rule_card.setStyleSheet("""
+            QWidget {
+                background: #FAFAFA;
+            }
+        """)
+
+        rule_layout = QVBoxLayout(rule_card)
+        rule_layout.setContentsMargins(10, 8, 10, 8)
+        rule_layout.setSpacing(6)
+
+        lbl_rule_title = QLabel("변경가능(rule)")
+        lbl_rule_title.setStyleSheet("font-weight: 600; color: #555;")
+
+        # 회사명 + 코드 라벨 추가
+        self.lbl_company_info = QLabel("-")
+        self.lbl_company_info.setStyleSheet("""
             QLabel {
-                font-weight: 600;
-                color: #555;
+                color: #777;
+                font-size: 11px;
             }
         """)
 
@@ -36,69 +52,61 @@ class InfoPanel(QWidget):
             QLabel {
                 color: #1E6EDB;
                 text-decoration: underline;
-                line-height: 140%;
             }
         """)
 
-        rule_layout = QVBoxLayout()
-        rule_layout.setSpacing(6)   # 제목-내용 간격
-        rule_layout.addWidget(self.lbl_rule_title)
+        rule_layout.addWidget(lbl_rule_title)
+        rule_layout.addWidget(self.lbl_company_info)
         rule_layout.addWidget(self.lbl_editable)
 
 
-        # ---------------- 가운데 구분선 ----------------
-        line = QFrame()
-        line.setFrameShape(QFrame.VLine)
-        line.setFrameShadow(QFrame.Sunken)
-
-
-        # ---------------- Remark 영역 (오른쪽) ----------------
-        self.lbl_remark_title = QLabel("비고(remark)")
-        self.lbl_remark_title.setStyleSheet("""
-            QLabel {
-                font-weight: 600;
-                color: #555;
+        # ================= Remark 카드 =================
+        remark_card = QWidget()
+        remark_card.setStyleSheet("""
+            QWidget {
+                background: #FAFAFA;
             }
         """)
 
-        self.lbl_remark = QLabel("-")
-        self.lbl_remark.setWordWrap(True)
-        self.lbl_remark.setStyleSheet("""
-            QLabel {
-                line-height: 140%;
-            }
-        """)
-
-        remark_layout = QVBoxLayout()
+        remark_layout = QVBoxLayout(remark_card)
+        remark_layout.setContentsMargins(10, 8, 10, 8)
         remark_layout.setSpacing(6)
-        remark_layout.addWidget(self.lbl_remark_title)
+
+        lbl_remark_title = QLabel("비고(remark)")
+        lbl_remark_title.setStyleSheet("font-weight: 600; color: #555;")
+
+        self.lbl_remark = QLabel("등록된 비고 없음")
+        self.lbl_remark.setWordWrap(True)
+        self.lbl_remark.setStyleSheet("color: #555;")
+
+        remark_layout.addWidget(lbl_remark_title)
         remark_layout.addWidget(self.lbl_remark)
 
 
-        # ---------------- main layout 구성 ----------------
-        main_layout.addLayout(rule_layout)
-        main_layout.addWidget(line)
-        main_layout.addLayout(remark_layout)
+        # ================= 배치 =================
+        main_layout.addWidget(rule_card)
+        main_layout.addWidget(remark_card)
 
-        # 비율 지정 (rule : remark = 3 : 2)
+        # 카드 비율 (Rule 더 넓게)
         main_layout.setStretch(0, 3)
-        main_layout.setStretch(1, 0)
-        main_layout.setStretch(2, 2)
+        main_layout.setStretch(1, 2)
 
         info_group.setLayout(main_layout)
         outer_layout.addWidget(info_group)
-        self.setLayout(outer_layout)
 
 
-    # ===== 기존 함수 유지 =====
+    # ===== 함수 유지 =====
     def set_remark(self, text: str):
-        """비고 설정"""
-        self.lbl_remark.setText(text or "-")
+        self.lbl_remark.setText(text if text else "등록된 비고 없음")
 
     def set_editable(self, text: str):
-        """Rule 텍스트 설정"""
         self.lbl_editable.setText(text or "-")
 
-    def get_editable_label(self) -> QLabel:
-        """클릭 이벤트 연결용"""
+    def get_editable_label(self):
         return self.lbl_editable
+
+    def set_company_info(self, name: str, code: str):
+        if name and code:
+            self.lbl_company_info.setText(f"{name} ({code})")
+        else:
+            self.lbl_company_info.setText("-")
