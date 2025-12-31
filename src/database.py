@@ -389,9 +389,14 @@ def add_rule_to_table(
         if status not in ["ACTIVE", "INACTIVE"]:
             raise ValueError("상태는 ACTIVE 또는 INACTIVE여야 합니다.")
         
-        # Priority: None이면 -1로 설정 (트리거가 자동으로 채움)
+        # Priority: None이면 현재 테이블의 최대 우선순위 + 1로 설정
         if priority is None:
-            priority = -1
+            cursor.execute(f'SELECT MAX(priority) FROM "{rule_table_name}"')
+            max_priority = cursor.fetchone()[0]
+            if max_priority is None:
+                priority = 1  # 첫 번째 규칙
+            else:
+                priority = max_priority + 1
         
         # 날짜 형식 검증
         if valid_from and valid_from.strip():
@@ -547,6 +552,44 @@ def update_rule_in_table(
     except sqlite3.OperationalError as e:
         conn.close()
         raise ValueError(f"Rule 수정 실패: {str(e)}")
+
+
+def update_rule_priorities(rule_table_name: str, rule_ids_in_order: List[int]) -> bool:
+    """
+    드래그 앤 드롭으로 변경된 순서에 따라 priority 재할당
+    
+    Args:
+        rule_table_name: 규칙 테이블명 (예: "rule_B907")
+        rule_ids_in_order: 새로운 순서대로 정렬된 rule_id 리스트
+        
+    Returns:
+        성공 여부
+    """
+    if not rule_table_name or not rule_table_name.startswith("rule_"):
+        raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
+    
+    if not rule_ids_in_order:
+        return True
+    
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    
+    try:
+        # 순서대로 priority 재할당 (1부터 시작)
+        for new_priority, rule_id in enumerate(rule_ids_in_order, start=1):
+            cursor.execute(f'''
+                UPDATE "{rule_table_name}" 
+                SET priority = ?, updated_at = DATETIME('now', 'localtime')
+                WHERE rule_id = ?
+            ''', (new_priority, rule_id))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.Error as e:
+        conn.rollback()
+        conn.close()
+        raise ValueError(f"우선순위 업데이트 실패: {str(e)}")
 
 
 def delete_rule_from_table(rule_table_name: str, rule_id: int) -> bool:

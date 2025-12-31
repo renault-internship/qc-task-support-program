@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (
 from src.database import (
     get_all_companies, get_all_companies_with_code, get_company_info, 
     get_rules_from_table, add_rule_to_table, update_rule_in_table, 
-    delete_rule_from_table, upsert_company, update_company_remark
+    delete_rule_from_table, upsert_company, update_company_remark,
+    update_rule_priorities
 )
 from src.gui.dialogs import AddRuleDialog
 
@@ -83,6 +84,8 @@ class RuleManagementWidget(QWidget):
         self.current_sap_code: Optional[str] = None
         self.original_remark: str = ""  # 원본 remark 저장
         self.rules: List[Dict[str, Any]] = []
+        self.priority_edit_mode: bool = False  # 우선순위 변경 모드 플래그
+        self._drag_start_row: Optional[int] = None  # 드래그 시작 row 추적용
         
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -126,6 +129,9 @@ class RuleManagementWidget(QWidget):
         button_layout.addWidget(self.btn_edit_rule)
         button_layout.addWidget(self.btn_delete_rule)
         button_layout.addStretch()
+        self.btn_priority_mode = QPushButton("우선순위 변경")
+        self.btn_priority_mode.setEnabled(False)
+        button_layout.addWidget(self.btn_priority_mode)
         layout.addLayout(button_layout)
         
         # 하단: Rule 테이블 전체 출력
@@ -136,6 +142,8 @@ class RuleManagementWidget(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
+        # 기본적으로 드래그 앤 드롭 비활성화 (우선순위 변경 모드에서만 활성화)
+        self.table.setDragDropMode(QTableWidget.NoDragDrop)
         rule_layout.addWidget(self.table)
         rule_group.setLayout(rule_layout)
         layout.addWidget(rule_group, 1)
@@ -146,6 +154,7 @@ class RuleManagementWidget(QWidget):
         self.btn_add_rule.clicked.connect(self.on_add_rule)
         self.btn_edit_rule.clicked.connect(self.on_edit_rule)
         self.btn_delete_rule.clicked.connect(self.on_delete_rule)
+        self.btn_priority_mode.clicked.connect(self.on_toggle_priority_mode)
         self.table.itemSelectionChanged.connect(self.on_selection_changed)
         self.btn_save_remark.clicked.connect(self.on_save_remark)
         self.remark_text.textChanged.connect(self.on_remark_changed)
@@ -180,6 +189,13 @@ class RuleManagementWidget(QWidget):
         
         self.refresh_table()
         self.btn_add_rule.setEnabled(self.current_rule_table is not None)
+        self.btn_priority_mode.setEnabled(self.current_rule_table is not None and len(self.rules) > 0)
+        
+        # 협력사 변경 시 우선순위 변경 모드 해제
+        if self.priority_edit_mode:
+            self.priority_edit_mode = False
+            self.table.setDragDropMode(QTableWidget.NoDragDrop)
+            self.btn_priority_mode.setText("우선순위 변경")
     
     def refresh_table(self):
         """테이블 새로고침 (rule 테이블 전체 컬럼 출력)"""
@@ -295,7 +311,7 @@ class RuleManagementWidget(QWidget):
         """선택 변경 시"""
         has_selection = len(self.table.selectedItems()) > 0
         self.btn_edit_rule.setEnabled(has_selection and self.current_rule_table is not None)
-        self.btn_delete_rule.setEnabled(has_selection and self.current_rule_table is not None)
+        self.btn_delete_rule.setEnabled(has_selection and self.current_rule_table is not None and not self.priority_edit_mode)
     
     def on_add_rule(self):
         """규칙 추가"""
@@ -449,6 +465,143 @@ class RuleManagementWidget(QWidget):
                 QMessageBox.warning(self, "오류", "Remark 저장에 실패했습니다.")
         except Exception as e:
             QMessageBox.critical(self, "오류", f"Remark 저장 실패: {str(e)}")
+    
+    def on_toggle_priority_mode(self):
+        """우선순위 변경 모드 토글"""
+        if not self.current_rule_table or len(self.rules) == 0:
+            return
+        
+        self.priority_edit_mode = not self.priority_edit_mode
+        
+        if self.priority_edit_mode:
+            # 우선순위 변경 모드 활성화
+            self.table.setDragDropMode(QTableWidget.InternalMove)
+            self.table.setDragDropOverwriteMode(False)
+            self.table.setDefaultDropAction(Qt.MoveAction)
+            self.btn_priority_mode.setText("우선순위 변경 종료")
+            self.btn_add_rule.setEnabled(False)
+            self.btn_edit_rule.setEnabled(False)
+            self.btn_delete_rule.setEnabled(False)
+            QMessageBox.information(self, "안내", "드래그 앤 드롭으로 규칙 순서를 변경할 수 있습니다.\n모드 종료 시 변경사항이 저장됩니다.")
+            
+            # dropEvent 오버라이드하여 row 이동을 수동으로 처리
+            # 드래그 시작 시점의 row를 저장
+            self._drag_start_row = None
+            original_start_drag = self.table.startDrag
+            def handle_start_drag(supported_actions):
+                self._drag_start_row = self.table.currentRow()
+                original_start_drag(supported_actions)
+            self.table.startDrag = handle_start_drag
+            
+            original_drop = self.table.dropEvent
+            def handle_drop(event):
+                if event.source() == self.table and event.dropAction() == Qt.MoveAction:
+                    if self._drag_start_row is None or self._drag_start_row < 0:
+                        event.ignore()
+                        return
+                    
+                    drag_row = self._drag_start_row
+                    
+                    # 드롭 위치 계산
+                    drop_pos = event.pos()
+                    drop_row = self.table.rowAt(drop_pos.y())
+                    
+                    if drop_row < 0:
+                        drop_row = self.table.rowCount()
+                    else:
+                        # 행의 중간 위치 확인
+                        item_rect = self.table.visualItemRect(self.table.item(drop_row, 0))
+                        if drop_pos.y() > item_rect.center().y():
+                            drop_row += 1
+                    
+                    if drag_row == drop_row or drop_row == drag_row + 1:
+                        event.ignore()
+                        return
+                    
+                    # 전체 데이터 가져오기
+                    all_rows = []
+                    for r in range(self.table.rowCount()):
+                        row_items = []
+                        for c in range(self.table.columnCount()):
+                            item = self.table.item(r, c)
+                            row_items.append(item.clone() if item else None)
+                        all_rows.append(row_items)
+                    
+                    # 순서 변경
+                    moved = all_rows.pop(drag_row)
+                    if drop_row > drag_row:
+                        drop_row -= 1
+                    all_rows.insert(drop_row, moved)
+                    
+                    # 테이블 재구성
+                    self.table.clearContents()
+                    self.table.setRowCount(len(all_rows))
+                    for r, row_items in enumerate(all_rows):
+                        for c, item in enumerate(row_items):
+                            if item:
+                                self.table.setItem(r, c, item)
+                    
+                    self._drag_start_row = None
+                    event.accept()
+                else:
+                    original_drop(event)
+            self.table.dropEvent = handle_drop
+        else:
+            # 우선순위 변경 모드 비활성화 - 변경사항 DB에 반영
+            self._save_priority_changes()
+            self.table.setDragDropMode(QTableWidget.NoDragDrop)
+            self.btn_priority_mode.setText("우선순위 변경")
+            self.btn_add_rule.setEnabled(self.current_rule_table is not None)
+            # 편집/삭제 버튼은 선택 상태에 따라 활성화
+            self.on_selection_changed()
+            
+            # 오버라이드 제거
+            self._drag_start_row = None
+    
+    def _save_priority_changes(self):
+        """현재 테이블 순서를 DB에 반영"""
+        if not self.current_rule_table or not self.rules:
+            return
+        
+        # 현재 테이블의 순서대로 rule_id 추출
+        rule_ids_in_order = []
+        for row in range(self.table.rowCount()):
+            # rule_id 컬럼 찾기
+            rule_id_col = None
+            for col in range(self.table.columnCount()):
+                header = self.table.horizontalHeaderItem(col)
+                if header and header.text() == "규칙 ID":
+                    rule_id_col = col
+                    break
+            
+            if rule_id_col is not None:
+                item = self.table.item(row, rule_id_col)
+                if item:
+                    try:
+                        rule_id = int(item.text())
+                        rule_ids_in_order.append(rule_id)
+                    except ValueError:
+                        pass
+        
+        # 순서가 변경되었는지 확인
+        if len(rule_ids_in_order) != len(self.rules):
+            return
+        
+        # 기존 순서와 비교
+        current_order = [r.get("rule_id") for r in self.rules]
+        if rule_ids_in_order == current_order:
+            return  # 순서 변경 없음
+        
+        # 우선순위 업데이트
+        try:
+            update_rule_priorities(self.current_rule_table, rule_ids_in_order)
+            # 규칙 목록 새로고침
+            self.set_company(self.current_company)
+            QMessageBox.information(self, "완료", "우선순위가 저장되었습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"우선순위 업데이트 실패: {str(e)}")
+            # 실패 시 원래대로 복구
+            self.set_company(self.current_company)
 
 
 class ComExManagementPageWidget(QWidget):
