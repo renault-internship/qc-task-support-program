@@ -94,7 +94,7 @@ class RuleManagementWidget(QWidget):
         # 제목
         from PySide6.QtWidgets import QLabel, QGroupBox, QTextEdit
         self.title_label = QLabel("협력사를 선택하세요")
-        self.title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.title_label.setStyleSheet("font-size: 10pt; font-weight: normal;")
         layout.addWidget(self.title_label)
         
         # 상단: Remark 영역

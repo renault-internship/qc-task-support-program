@@ -179,7 +179,7 @@ def create_rule_table(rule_table_name: str, cursor=None) -> bool:
                 engine_form TEXT NOT NULL DEFAULT 'ALL',
                 warranty_mileage_override INTEGER,
                 warranty_period_override INTEGER,
-                liability_ratio REAL NOT NULL,
+                liability_ratio REAL,
                 amount_cap_type TEXT NOT NULL DEFAULT 'NONE' CHECK (amount_cap_type IN ('LABOR','OUTSOURCE_LABOR','BOTH_LABOR','NONE')),
                 amount_cap_value INTEGER,
                 valid_from TEXT CHECK (valid_from IS NULL OR date(valid_from) IS NOT NULL),
@@ -312,8 +312,8 @@ def add_rule_to_table(
     status: str,
     repair_region: str,
     vehicle_classification: str,
-    liability_ratio: float,
     amount_cap_type: str,
+    liability_ratio: float = None,  # NULL 허용 (LABOR 최댓값 규칙의 경우 None 가능)
     project_code: str = "ALL",
     part_name: str = "ALL",
     part_no: str = "ALL",
@@ -334,7 +334,7 @@ def add_rule_to_table(
         status: 상태 (예: "ACTIVE", "INACTIVE") - DEFAULT 'ACTIVE'
         repair_region: 수리 지역 ('DOMESTIC','OVERSEAS','ALL')
         vehicle_classification: 차량 분류 - DEFAULT 'ALL'
-        liability_ratio: 구상율 (필수)
+        liability_ratio: 구상율 (NULL 허용, LABOR 최댓값 규칙의 경우 None 가능)
         amount_cap_type: 금액 상한 타입 ('LABOR','OUTSOURCE_LABOR','BOTH_LABOR','NONE') - DEFAULT 'NONE'
         project_code: 프로젝트 코드 - DEFAULT 'ALL'
         part_name: 부품명 - DEFAULT 'ALL'
@@ -367,8 +367,14 @@ def add_rule_to_table(
         if not vehicle_classification:
             vehicle_classification = "ALL"
         
+        # liability_ratio는 NULL 허용 (LABOR 최댓값 규칙의 경우 None 가능)
+        # amount_cap_type이 LABOR, OUTSOURCE_LABOR, BOTH_LABOR이고 amount_cap_value가 있으면 liability_ratio는 None 가능
         if liability_ratio is None:
-            raise ValueError("구상율은 필수입니다.")
+            # LABOR 최댓값 규칙인 경우에만 NULL 허용
+            if amount_cap_type in ["LABOR", "OUTSOURCE_LABOR", "BOTH_LABOR"] and amount_cap_value is not None:
+                pass  # NULL 허용
+            else:
+                raise ValueError("구상율은 필수입니다. (LABOR 최댓값 규칙이 아닌 경우)")
         
         if not amount_cap_type:
             amount_cap_type = "NONE"

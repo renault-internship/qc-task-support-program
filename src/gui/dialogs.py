@@ -93,14 +93,6 @@ class AddRuleDialog(QDialog):
         self.warranty_period_spin.setSpecialValueText("없음")
         layout.addRow("보증 기간 오버라이드 (일):", self.warranty_period_spin)
         
-        # Liability Ratio (필수)
-        self.liability_ratio_spin = QDoubleSpinBox()
-        self.liability_ratio_spin.setRange(0.0, 100.0)
-        self.liability_ratio_spin.setDecimals(2)
-        self.liability_ratio_spin.setSuffix(" %")
-        self.liability_ratio_spin.setValue(0.0)
-        layout.addRow("구상율 *:", self.liability_ratio_spin)
-        
         # Amount Cap Type (DEFAULT 'NONE', CHECK IN ('LABOR','OUTSOURCE_LABOR','BOTH_LABOR','NONE'))
         self.amount_cap_combo = QComboBox()
         self.amount_cap_combo.addItems(["NONE", "LABOR", "OUTSOURCE_LABOR", "BOTH_LABOR"])
@@ -113,6 +105,19 @@ class AddRuleDialog(QDialog):
         self.amount_cap_spin.setValue(0)
         self.amount_cap_spin.setSpecialValueText("없음")
         layout.addRow("금액 상한 값:", self.amount_cap_spin)
+        
+        # Liability Ratio (선택사항 - LABOR 최댓값 규칙의 경우 NULL 가능)
+        self.liability_ratio_spin = QDoubleSpinBox()
+        self.liability_ratio_spin.setRange(0.0, 100.0)
+        self.liability_ratio_spin.setDecimals(2)
+        self.liability_ratio_spin.setSuffix(" %")
+        self.liability_ratio_spin.setValue(0.0)
+        self.liability_ratio_spin.setSpecialValueText("없음 (LABOR 최댓값 규칙용)")
+        layout.addRow("구상율:", self.liability_ratio_spin)
+        
+        # amount_cap_type과 amount_cap_value 변경 시 구상율 필수 여부 업데이트
+        self.amount_cap_combo.currentTextChanged.connect(self._update_liability_ratio_required)
+        self.amount_cap_spin.valueChanged.connect(self._update_liability_ratio_required)
         
         # Valid From (날짜 형식)
         self.valid_from_edit = QLineEdit()
@@ -181,7 +186,12 @@ class AddRuleDialog(QDialog):
             self.warranty_period_spin.setValue(int(rule_data["warranty_period_override"]))
         
         if "liability_ratio" in rule_data:
-            self.liability_ratio_spin.setValue(float(rule_data["liability_ratio"]))
+            # liability_ratio가 None일 수 있음
+            liability_ratio = rule_data.get("liability_ratio")
+            if liability_ratio is not None:
+                self.liability_ratio_spin.setValue(float(liability_ratio))
+            else:
+                self.liability_ratio_spin.setValue(0.0)  # None이면 0으로 표시 (SpecialValueText)
         
         if "amount_cap_type" in rule_data:
             idx = self.amount_cap_combo.findText(rule_data["amount_cap_type"])
@@ -196,6 +206,12 @@ class AddRuleDialog(QDialog):
         
         if "valid_to" in rule_data:
             self.valid_to_edit.setText(str(rule_data["valid_to"]) if rule_data["valid_to"] else "")
+    
+    def _update_liability_ratio_required(self):
+        """amount_cap_type과 amount_cap_value에 따라 구상율 필수 여부 업데이트"""
+        # LABOR 최댓값 규칙인 경우 구상율은 선택사항
+        # 이 함수는 필요시 확장 가능 (예: 툴팁 변경 등)
+        pass
     
     def get_data(self) -> Dict[str, Any]:
         """입력된 데이터 반환"""
@@ -230,7 +246,7 @@ class AddRuleDialog(QDialog):
             "engine_form": self.engine_form_edit.text().strip() or "ALL",
             "warranty_mileage_override": warranty_mileage,
             "warranty_period_override": warranty_period,
-            "liability_ratio": self.liability_ratio_spin.value(),
+            "liability_ratio": self.liability_ratio_spin.value() if self.liability_ratio_spin.value() > 0.0 else None,
             "amount_cap_type": self.amount_cap_combo.currentText(),
             "amount_cap_value": amount_cap_value,
             "valid_from": self.valid_from_edit.text().strip() or None,
