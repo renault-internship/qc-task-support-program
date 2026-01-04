@@ -112,20 +112,25 @@ def parse_excel_date(v):
 def guess_last_data_row(ws, data_start_row: int, anchor_col: int, empty_run: int = 30) -> int:
     """
     데이터 끝 추정:
-    anchor_col(예: repair_date)을 기준으로 연속 empty가 empty_run 이상이면 그 전을 데이터 끝으로 봄
+    anchor_col에서 마지막으로 값이 있는 행을 찾음
+    연속 빈 셀 empty_run개 이상이면 그 전까지가 데이터 영역
     """
-    last = ws.max_row
+    last_data_row = data_start_row
     streak = 0
+    
     for r in range(data_start_row, ws.max_row + 1):
         v = ws.cell(row=r, column=anchor_col).value
         if v in (None, ""):
             streak += 1
             if streak >= empty_run:
-                last = r - empty_run
+                # 연속 빈 셀이 empty_run개 이상이면 중단
                 break
         else:
+            # 값이 있으면 이 행을 마지막 데이터 행으로 갱신
+            last_data_row = r
             streak = 0
-    return max(last, data_start_row)
+    
+    return last_data_row
 
 from pathlib import Path
 from openpyxl import load_workbook
