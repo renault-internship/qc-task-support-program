@@ -36,7 +36,7 @@ class ControlPanel(QWidget):
         top_row.addWidget(self.sheet_combo, 1)  # stretch factor 1
         
         # 코멕스 불러오기
-        top_row.addWidget(QLabel("코멕스 불러오기:"))
+        top_row.addWidget(QLabel("COMEX 불러오기:"))
         self.company_edit = QLineEdit()
         self.company_edit.setPlaceholderText("협력사 검색 (이름 또는 코드)")
         # QCompleter 설정
@@ -62,11 +62,29 @@ class ControlPanel(QWidget):
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(8)
         
+        # 실행취소/다시실행 버튼 추가
+        self.btn_undo = QPushButton("실행취소")
+        self.btn_undo.setEnabled(False)
+        bottom_row.addWidget(self.btn_undo)
+        
+        self.btn_redo = QPushButton("다시실행")
+        self.btn_redo.setEnabled(False)
+        bottom_row.addWidget(self.btn_redo)
+        
         # 검색
         bottom_row.addWidget(QLabel("검색:"))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("search (시트 내 검색)")
         bottom_row.addWidget(self.search_edit, 1)
+        
+        # 필터 버튼
+        self.btn_filter = QPushButton("필터")
+        bottom_row.addWidget(self.btn_filter)
+        
+        # 필터 해제 버튼
+        self.btn_clear_filter = QPushButton("필터 해제")
+        self.btn_clear_filter.setEnabled(False)  # 초기 비활성화
+        bottom_row.addWidget(self.btn_clear_filter)
         
         # 편집 제어
         self.chk_edit_all = QCheckBox("전체 셀 편집 허용")
@@ -113,4 +131,20 @@ class ControlPanel(QWidget):
     def get_export_final_button(self) -> QPushButton:
         """export (최종 엑셀) 버튼 반환"""
         return self.btn_export_final
+    
+    def get_filter_button(self) -> QPushButton:
+        """필터 버튼 반환"""
+        return self.btn_filter
+    
+    def get_clear_filter_button(self) -> QPushButton:
+        """필터 해제 버튼 반환"""
+        return self.btn_clear_filter
+    
+    def get_undo_button(self) -> QPushButton:
+        """실행취소 버튼 반환"""
+        return self.btn_undo
+    
+    def get_redo_button(self) -> QPushButton:
+        """다시실행 버튼 반환"""
+        return self.btn_redo
 

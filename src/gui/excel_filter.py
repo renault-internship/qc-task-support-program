@@ -6,10 +6,14 @@ from __future__ import annotations
 from typing import Dict, Optional, Set, List
 
 from PySide6.QtCore import Qt, QSortFilterProxyModel, QModelIndex
+from src.gui.models import ExcelSheetModel
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
-    QListWidget, QListWidgetItem, QLabel
+    QListWidget, QListWidgetItem, QLabel, QAbstractItemView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QStyledItemDelegate
 )
+from PySide6.QtGui import QPen
+from PySide6.QtCore import QRect
 
 
 _EMPTY_TOKEN = "(빈값)"
@@ -42,6 +46,10 @@ class ExcelFilterProxyModel(QSortFilterProxyModel):
 
     def get_column_filter(self, col: int) -> Optional[Set[str]]:
         return self._col_allowed.get(col)
+    
+    def has_active_filters(self) -> bool:
+        """활성화된 필터가 있는지 확인"""
+        return len(self._col_allowed) > 0
 
     def _cell_text(self, source_row: int, source_col: int) -> str:
         src = self.sourceModel()
@@ -55,11 +63,15 @@ class ExcelFilterProxyModel(QSortFilterProxyModel):
         return s
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
-        # 1) 기존 검색(정규식)은 super가 처리
+        # 1, 2, 3행은 항상 표시 (고정 행)
+        if source_row < 3:  # 0, 1, 2 = 1행, 2행, 3행
+            return True
+        
+        # 2) 기존 검색(정규식)은 super가 처리
         if not super().filterAcceptsRow(source_row, source_parent):
             return False
 
-        # 2) 컬럼별 필터 AND
+        # 3) 컬럼별 필터 AND
         src = self.sourceModel()
         if src is None:
             return True
@@ -206,3 +218,106 @@ class ColumnFilterDialog(QDialog):
             self.proxy.set_column_filter(self.col, selected)
 
         self.accept()
+
+
+class ColumnSelectDialog(QDialog):
+    """
+    컬럼 선택 다이얼로그 - 필터를 적용할 컬럼 선택 (표 형태)
+    """
+    def __init__(self, source_model, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("컬럼 선택")
+        self.resize(500, 400)
+        
+        self.source_model = source_model
+        self.selected_col = None
+        
+        root = QVBoxLayout(self)
+        
+        root.addWidget(QLabel("필터를 적용할 컬럼을 선택하세요:"))
+        
+        # 테이블 위젯 (표 형태)
+        self.table = QTableWidget()
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(["열 이름", "컬럼명 (3행)"])
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.verticalHeader().setVisible(False)
+        
+        # 말줄임표 없이 전체 텍스트 표시하는 Delegate 적용
+        from src.gui.containers.preview_container import NoElideDelegate
+        self.table.setItemDelegate(NoElideDelegate(self.table))
+        
+        root.addWidget(self.table, 1)
+        
+        # 컬럼 목록 채우기
+        if source_model:
+            col_count = source_model.columnCount()
+            header_row = 3  # 3행이 컬럼명
+            self.table.setRowCount(col_count)
+            
+            for col in range(col_count):
+                col_letter = ExcelSheetModel.excel_col_name(col + 1)
+                
+                # 열 이름 컬럼
+                col_item = QTableWidgetItem(col_letter)
+                col_item.setData(Qt.UserRole, col)
+                col_item.setFlags(col_item.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(col, 0, col_item)
+                
+                # 3행의 실제 셀 내용 가져오기
+                if hasattr(source_model, 'ws'):
+                    cell_value = source_model.ws.cell(row=header_row, column=col + 1).value
+                    cell_text = str(cell_value) if cell_value is not None else ""
+                else:
+                    cell_text = ""
+                
+                # 컬럼명 컬럼
+                name_item = QTableWidgetItem(cell_text if cell_text else "(빈값)")
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(col, 1, name_item)
+        
+        # 컬럼 너비 자동 조정 (내용에 맞게)
+        self.table.resizeColumnsToContents()
+        # 첫 번째 컬럼 최소 너비 설정
+        if self.table.columnWidth(0) < 100:
+            self.table.setColumnWidth(0, 100)
+        # 두 번째 컬럼은 최소 너비 보장
+        if self.table.columnWidth(1) < 200:
+            self.table.setColumnWidth(1, 200)
+        
+        # 행 높이 자동 조정 (텍스트가 잘리지 않도록)
+        self.table.resizeRowsToContents()
+        # 최소 행 높이 설정
+        for row in range(self.table.rowCount()):
+            if self.table.rowHeight(row) < 30:
+                self.table.setRowHeight(row, 30)
+        
+        # 하단 버튼
+        bottom = QHBoxLayout()
+        self.btn_ok = QPushButton("확인")
+        self.btn_cancel = QPushButton("취소")
+        bottom.addStretch(1)
+        bottom.addWidget(self.btn_ok)
+        bottom.addWidget(self.btn_cancel)
+        root.addLayout(bottom)
+        
+        # 시그널
+        self.btn_ok.clicked.connect(self._on_ok)
+        self.btn_cancel.clicked.connect(self.reject)
+        self.table.itemDoubleClicked.connect(self._on_ok)
+    
+    def _on_ok(self):
+        current_row = self.table.currentRow()
+        if current_row >= 0:
+            col_item = self.table.item(current_row, 0)
+            if col_item:
+                self.selected_col = col_item.data(Qt.UserRole)
+                self.accept()
+                return
+        self.reject()
+    
+    def get_selected_column(self) -> int:
+        """선택된 컬럼 인덱스 반환"""
+        return self.selected_col
