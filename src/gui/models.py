@@ -84,7 +84,13 @@ class ExcelSheetModel(QAbstractTableModel):
         r = index.row() + 1
         c = index.column() + 1
 
-        # 병합이면 좌상단 기준으로 값 조회(방법 B)
+        # 병합된 셀의 경우, 좌상단이 아닌 셀에서는 빈 문자열 반환
+        if self._is_merged_non_topleft(r, c):
+            if role == Qt.DisplayRole or role == Qt.EditRole:
+                return ""
+            return None
+
+        # 병합이면 좌상단 기준으로 값 조회
         cr, cc = self._canonical_cell(r, c)
 
         v = self.dirty.get((cr, cc), self.ws.cell(row=cr, column=cc).value)

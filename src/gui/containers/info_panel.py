@@ -33,12 +33,12 @@ class InfoPanel(QWidget):
 
         # 1) 적용 Rule 텍스트 - 상단
         lbl_rule_title = QLabel("적용 Rule")
-        lbl_rule_title.setStyleSheet("font-weight: 600; color: #555;")
+        lbl_rule_title.setStyleSheet("font-weight: normal; font-size: 10pt; color: #555;")
         rule_layout.addWidget(lbl_rule_title)
 
         # 2) 회사명과 회사코드 표시
         self.lbl_company_info = QLabel("-")
-        self.lbl_company_info.setStyleSheet("color: #777; font-size: 11px;")
+        self.lbl_company_info.setStyleSheet("color: #777; font-size: 10pt;")
         rule_layout.addWidget(self.lbl_company_info)
 
         # 3) Rule 목록 레이아웃
@@ -56,7 +56,7 @@ class InfoPanel(QWidget):
         remark_layout.setSpacing(6)
 
         lbl_remark_title = QLabel("비고(remark)")
-        lbl_remark_title.setStyleSheet("font-weight: 600; color: #555;")
+        lbl_remark_title.setStyleSheet("font-weight: normal; font-size: 10pt; color: #555;")
         self.remark_text = QTextEdit()
         self.remark_text.setMaximumHeight(80)
 
@@ -104,7 +104,7 @@ class InfoPanel(QWidget):
 
         if not rules:
             lbl = QLabel("등록된 Rule 없음")
-            lbl.setStyleSheet("color: #999; font-size: 11px;")
+            lbl.setStyleSheet("color: #999; font-size: 10pt;")
             self.rule_list_layout.addWidget(lbl)
             return
 
@@ -117,12 +117,12 @@ class InfoPanel(QWidget):
 
             lbl = QLabel(text)
             lbl.setWordWrap(True)
-            lbl.setStyleSheet("font-size: 11px;")
+            lbl.setStyleSheet("font-size: 10pt;")
 
             if status.upper() == "ACTIVE":
-                lbl.setStyleSheet("font-size: 11px; color: #2E7D32;")
+                lbl.setStyleSheet("font-size: 10pt; color: #2E7D32;")
             elif status.upper() == "INACTIVE":
-                lbl.setStyleSheet("font-size: 11px; color: #888;")
+                lbl.setStyleSheet("font-size: 10pt; color: #888;")
 
             self.rule_list_layout.addWidget(lbl)
 
