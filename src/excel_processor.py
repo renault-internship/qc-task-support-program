@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, List, Tuple
 
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.cell.cell import MergedCell
 
@@ -200,50 +200,72 @@ def set_chargeback_formula_rows(ws, data_rows: List[int], occ_col: int, rate_col
 # =========================================================
 # 7) 아래 합계 행(SUM, 필터 무시)
 # =========================================================
-def add_sum_rows(ws, data_rows: List[int], occ_col: int, chb_col: int) -> None:
-    if not data_rows:
-        return
-
-    first_row = data_rows[0]
-    last_row = data_rows[-1]
-    sum_start_row = last_row + 3
-
-    set_cell_value_safe(ws, sum_start_row, occ_col - 1, "발생금액")
-    set_cell_value_safe(
-        ws,
-        sum_start_row,
-        occ_col,
-        f"=SUM({ws.cell(row=first_row, column=occ_col).coordinate}:{ws.cell(row=last_row, column=occ_col).coordinate})",
-    )
-
-    set_cell_value_safe(ws, sum_start_row + 1, chb_col - 1, "구상금액")
-    set_cell_value_safe(
-        ws,
-        sum_start_row + 1,
-        chb_col,
-        f"=SUM({ws.cell(row=first_row, column=chb_col).coordinate}:{ws.cell(row=last_row, column=chb_col).coordinate})",
-    )
+def add_sum_rows(ws, first_row: int, last_row: int, occ_col: int, chb_col: int) -> None:
+    """
+    하단 합계 행 추가
+    Args:
+        first_row: 데이터 시작 행
+        last_row: 데이터 마지막 행 (병합 포함)
+        occ_col: 발생금액 컬럼 (T열)
+        chb_col: 구상금액 컬럼 (V열)
+    """
+    # 1. 마지막 행 + 1행에 T열, V열 SUM 추가
+    sum_row = last_row + 1
+    
+    # T열 SUM (발생금액) - 값이 표시되도록 명시적으로 설정
+    sum_range_occ = f"{ws.cell(row=first_row, column=occ_col).coordinate}:{ws.cell(row=last_row, column=occ_col).coordinate}"
+    sum_cell_occ = ws.cell(row=sum_row, column=occ_col)  # 병합 처리 없이 직접 접근
+    sum_cell_occ.value = f"=SUM({sum_range_occ})"
+    source_cell_occ = ws.cell(row=first_row, column=occ_col)
+    sum_cell_occ.number_format = source_cell_occ.number_format if source_cell_occ.number_format else "_ * #,##0.00_ ;_ * -#,##0.00_ ;_ * \"-\"??_ ;_ @_"
+    
+    # V열 SUM (구상금액) - 값이 표시되도록 명시적으로 설정
+    sum_range_chb = f"{ws.cell(row=first_row, column=chb_col).coordinate}:{ws.cell(row=last_row, column=chb_col).coordinate}"
+    sum_cell_chb = ws.cell(row=sum_row, column=chb_col)  # 병합 처리 없이 직접 접근
+    sum_cell_chb.value = f"=SUM({sum_range_chb})"
+    source_cell_chb = ws.cell(row=first_row, column=chb_col)
+    sum_cell_chb.number_format = source_cell_chb.number_format if source_cell_chb.number_format else "_ * #,##0.00_ ;_ * -#,##0.00_ ;_ * \"-\"??_ ;_ @_"
+    
+    # 2. 2행 띄우고 (마지막 행 + 3행) 발생금액/구상금액 레이블 추가
+    label_start_row = last_row + 3
+    
+    # 발생금액
+    set_cell_value_safe(ws, label_start_row, occ_col - 1, "발생금액")  # S열
+    label_cell_occ = _cell_safe(ws, label_start_row, occ_col)  # T열
+    label_cell_occ.value = f"={sum_cell_occ.coordinate}"  # 위에서 계산한 SUM 참조
+    label_cell_occ.number_format = source_cell_occ.number_format if source_cell_occ.number_format else "_ * #,##0.00_ ;_ * -#,##0.00_ ;_ * \"-\"??_ ;_ @_"
+    
+    # 구상금액 (빨간색)
+    label_cell_chb_text = _cell_safe(ws, label_start_row + 1, occ_col - 1)  # S열
+    label_cell_chb_text.value = "구상금액"
+    label_cell_chb_text.font = Font(color="FF0000")  # 빨간색 텍스트
+    
+    label_cell_chb = _cell_safe(ws, label_start_row + 1, occ_col)  # T열
+    label_cell_chb.value = f"={sum_cell_chb.coordinate}"  # 위에서 계산한 SUM 참조
+    label_cell_chb.number_format = source_cell_chb.number_format if source_cell_chb.number_format else "_ * #,##0.00_ ;_ * -#,##0.00_ ;_ * \"-\"??_ ;_ @_"
+    label_cell_chb.font = Font(color="FF0000")  # 빨간색 숫자
 
 
 # =========================================================
 # 8) 상단 서브토탈(SUBTOTAL 9, 필터 반영)
 # =========================================================
-def set_subtotal_if_empty(ws, target_col: int, data_rows: List[int], subtotal_row: int) -> None:
-    if not data_rows:
-        return
-
+def set_subtotal_if_empty(ws, target_col: int, first_row: int, last_row: int, subtotal_row: int) -> None:
+    """
+    상단 서브토탈 설정
+    Args:
+        first_row: 데이터 시작 행
+        last_row: 데이터 마지막 행 (병합 포함)
+    """
     cell = ws.cell(row=subtotal_row, column=target_col)
     if not _is_blank(cell.value):
         return
 
-    first_row = data_rows[0]
-    last_row = data_rows[-1]
-    set_cell_value_safe(
-        ws,
-        subtotal_row,
-        target_col,
-        f"=SUBTOTAL(9,{ws.cell(row=first_row, column=target_col).coordinate}:{ws.cell(row=last_row, column=target_col).coordinate})",
-    )
+    subtotal_range = f"{ws.cell(row=first_row, column=target_col).coordinate}:{ws.cell(row=last_row, column=target_col).coordinate}"
+    subtotal_cell = _cell_safe(ws, subtotal_row, target_col)
+    subtotal_cell.value = f"=SUBTOTAL(9,{subtotal_range})"
+    # 원본 셀의 형식 참고 (회계 형식)
+    source_cell = ws.cell(row=first_row, column=target_col)
+    subtotal_cell.number_format = source_cell.number_format if source_cell.number_format else "_ * #,##0.00_ ;_ * -#,##0.00_ ;_ * \"-\"??_ ;_ @_"
 
 
 
@@ -305,11 +327,14 @@ def process_wb_inplace(wb: Workbook, cfg: CompanyConfig) -> None:
     rate_col = find_rate_col(ws, cfg.header_row)
     chb_col = find_chargeback_col(ws, cfg.header_row)
 
-    anchor_col = find_col_by_keywords_ws(ws, cfg.header_row, list(cfg.anchor_keywords), mode="any")
-    last_row_guess = guess_last_data_row(ws, cfg.data_start_row, anchor_col=anchor_col, empty_run=30)
+    # 마지막 행 찾기: 교환부품번호 컬럼 사용 (병합 없음, 정확함)
+    part_col = find_col_by_keywords_ws(ws, cfg.header_row, ["replaced part", "교환부품", "part no", "교환부품번호"], mode="any")
+    last_row_guess = guess_last_data_row(ws, cfg.data_start_row, anchor_col=part_col, empty_run=30)
 
     unmerge_and_fill_column(ws, vehicle_col, cfg.data_start_row, last_row_guess)
 
+    # 데이터 행 찾기는 기존 anchor_col 사용 (수리일자 등)
+    anchor_col = find_col_by_keywords_ws(ws, cfg.header_row, list(cfg.anchor_keywords), mode="any")
     data_rows = iter_data_rows(ws, cfg.data_start_row, last_row_guess, anchor_col=anchor_col)
     if not data_rows:
         return
@@ -324,11 +349,17 @@ def process_wb_inplace(wb: Workbook, cfg: CompanyConfig) -> None:
     )
 
     set_chargeback_formula_rows(ws, data_rows, occ_col, rate_col, chb_col)
-    add_sum_rows(ws, data_rows, occ_col, chb_col)
+    # 수식 범위는 실제 마지막 행 사용 (병합 포함)
+    add_sum_rows(ws, cfg.data_start_row, last_row_guess, occ_col, chb_col)
 
     # 상단 서브토탈: "구상금액" 기준
     subtotal_row = cfg.header_row - 1
-    set_subtotal_if_empty(ws, target_col=chb_col, data_rows=data_rows, subtotal_row=subtotal_row)
+    set_subtotal_if_empty(ws, target_col=chb_col, first_row=cfg.data_start_row, last_row=last_row_guess, subtotal_row=subtotal_row)
+    
+    # 자동 필터 설정 (3행 기준)
+    from openpyxl.utils import get_column_letter
+    last_col_letter = get_column_letter(ws.max_column)
+    ws.auto_filter.ref = f"A{cfg.header_row}:{last_col_letter}{last_row_guess}"
 
 
 # =========================================================
