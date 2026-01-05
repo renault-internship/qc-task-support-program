@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QPushButton, QComboBox, QLineEdit, QLabel, QCheckBox, QCompleter, QSizePolicy
 )
 from PySide6.QtCore import Qt
+from src.gui.color_palette_dialog import ColorToolButton
 
 
 class ControlPanel(QWidget):
@@ -77,6 +78,14 @@ class ControlPanel(QWidget):
         self.search_edit.setPlaceholderText("search (시트 내 검색)")
         bottom_row.addWidget(self.search_edit, 1)
         
+        # 배경색 버튼 (엑셀 스타일)
+        self.btn_fill_color = ColorToolButton(button_type="fill")
+        bottom_row.addWidget(self.btn_fill_color)
+        
+        # 글자색 버튼 (엑셀 스타일)
+        self.btn_font_color = ColorToolButton(button_type="font")
+        bottom_row.addWidget(self.btn_font_color)
+        
         # 필터 버튼
         self.btn_filter = QPushButton("필터")
         bottom_row.addWidget(self.btn_filter)
@@ -147,4 +156,12 @@ class ControlPanel(QWidget):
     def get_redo_button(self) -> QPushButton:
         """다시실행 버튼 반환"""
         return self.btn_redo
+    
+    def get_fill_color_button(self) -> ColorToolButton:
+        """배경색 버튼 반환"""
+        return self.btn_fill_color
+    
+    def get_font_color_button(self) -> ColorToolButton:
+        """글자색 버튼 반환"""
+        return self.btn_font_color
 

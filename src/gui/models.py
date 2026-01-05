@@ -10,10 +10,13 @@ Excel 데이터 모델
 from __future__ import annotations
 
 from datetime import datetime, date
-from typing import Dict, Tuple, Any, List, Optional
+from typing import Dict, Tuple, Any, List, Optional, TYPE_CHECKING
 from collections import deque
 
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
+
+if TYPE_CHECKING:
+    from PySide6.QtGui import QColor
 
 
 class ExcelSheetModel(QAbstractTableModel):
@@ -55,6 +58,13 @@ class ExcelSheetModel(QAbstractTableModel):
         self._undo_stack: deque = deque(maxlen=100)  # 최대 100개까지 저장
         self._redo_stack: deque = deque(maxlen=100)
         self._is_undoing: bool = False  # Undo/Redo 중인지 플래그
+        
+        # 사용자가 직접 설정한 색상
+        self.user_fill_colors: Dict[Tuple[int, int], Any] = {}  # (row, col) -> QColor
+        self.user_font_colors: Dict[Tuple[int, int], Any] = {}  # (row, col) -> QColor
+        
+        # A열 키워드 검색 및 로그 출력
+        self._check_keywords_in_column_a()
     
     def set_proxy_model(self, proxy_model):
         """필터 상태 확인을 위한 proxy_model 참조 설정"""
@@ -97,6 +107,116 @@ class ExcelSheetModel(QAbstractTableModel):
         r = index.row() + 1
         c = index.column() + 1
 
+        # ✅ BackgroundRole을 가장 먼저 처리 (병합 셀 early return 전에)
+        if role == Qt.BackgroundRole:
+            # 병합이면 좌상단 기준으로 정규화
+            cr, cc = self._canonical_cell(r, c)
+            
+            # 1. 사용자가 설정한 색상 우선
+            if (cr, cc) in self.user_fill_colors:
+                from PySide6.QtGui import QBrush
+                return QBrush(self.user_fill_colors[(cr, cc)])
+            
+            # 2. 엑셀 셀의 fill 속성 확인 (전처리 하이라이트만)
+            try:
+                cell = self.ws.cell(row=cr, column=cc)
+                if cell.fill and cell.fill.fill_type == "solid":
+                    fill_color = cell.fill.start_color
+                    if fill_color:
+                        # openpyxl의 Color 객체 또는 문자열 처리
+                        color_str = None
+                        if isinstance(fill_color, str):
+                            color_str = fill_color.upper()
+                        elif hasattr(fill_color, 'rgb') and fill_color.rgb:
+                            color_str = str(fill_color.rgb).upper()
+                        else:
+                            # 기타 경우는 무시
+                            pass
+                        
+                        if color_str:
+                            # hex 색상 코드 추출 (ARGB 또는 RGB 형식)
+                            hex_color = None
+                            
+                            if len(color_str) == 8:
+                                # ARGB 형식 (AARRGGBB) - Alpha 제외하고 RGB만 추출
+                                hex_color = color_str[2:8]
+                            elif len(color_str) >= 6:
+                                # RGB 형식 (RRGGBB)
+                                hex_color = color_str[:6]
+                            
+                            # 전처리 노란색(FFFF00)만 표시
+                            if hex_color == "FFFF00":
+                                from PySide6.QtGui import QBrush, QColor
+                                return QBrush(QColor(255, 255, 0))
+            except Exception:
+                pass
+            
+            # A열 값 확인하여 특정 텍스트가 있으면 행 전체를 연한 파란색으로
+            try:
+                a_row, a_col_idx = self._canonical_cell(r, 1)
+                a_col_value = self.dirty.get((a_row, a_col_idx))
+                if a_col_value is None:
+                    a_cell = self.ws.cell(row=a_row, column=a_col_idx)
+                    a_col_value = a_cell.value
+                
+                if a_col_value is not None:
+                    a_value_str = str(a_col_value).strip().upper()
+                    keywords = ["REPAIR DATE", "건수"]
+                    
+                    if any(kw in a_value_str for kw in keywords):
+                        from PySide6.QtGui import QBrush, QColor
+                        return QBrush(QColor(240, 248, 255))
+            except Exception:
+                pass
+            
+            return None
+        
+        # ✅ ForegroundRole 처리 (글자색)
+        if role == Qt.ForegroundRole:
+            # 병합이면 좌상단 기준으로 정규화
+            cr, cc = self._canonical_cell(r, c)
+            
+            # 1. 사용자가 설정한 색상 우선
+            if (cr, cc) in self.user_font_colors:
+                from PySide6.QtGui import QColor
+                return self.user_font_colors[(cr, cc)]
+            
+            # 2. 엑셀 셀의 font.color 속성 확인 (전처리 빨간색만)
+            try:
+                cell = self.ws.cell(row=cr, column=cc)
+                if cell.font and cell.font.color:
+                    font_color = cell.font.color
+                    if font_color:
+                        # openpyxl의 Color 객체 또는 문자열 처리
+                        color_str = None
+                        if isinstance(font_color, str):
+                            color_str = font_color.upper()
+                        elif hasattr(font_color, 'rgb') and font_color.rgb:
+                            color_str = str(font_color.rgb).upper()
+                        else:
+                            # 기타 경우는 무시
+                            pass
+                        
+                        if color_str:
+                            # hex 색상 코드 추출 (ARGB 또는 RGB 형식)
+                            hex_color = None
+                            
+                            if len(color_str) == 8:
+                                # ARGB 형식 (AARRGGBB) - Alpha 제외하고 RGB만 추출
+                                hex_color = color_str[2:8]
+                            elif len(color_str) >= 6:
+                                # RGB 형식 (RRGGBB)
+                                hex_color = color_str[:6]
+                            
+                            # 전처리 빨간색(FF0000)만 표시
+                            if hex_color == "FF0000":
+                                from PySide6.QtGui import QColor
+                                return QColor(255, 0, 0)
+            except Exception:
+                pass
+            
+            return None
+
         # 병합된 셀의 경우, 좌상단이 아닌 셀에서는 빈 문자열 반환
         if self._is_merged_non_topleft(r, c):
             if role == Qt.DisplayRole or role == Qt.EditRole:
@@ -109,19 +229,28 @@ class ExcelSheetModel(QAbstractTableModel):
         v = self.dirty.get((cr, cc), self.ws.cell(row=cr, column=cc).value)
 
         if role == Qt.EditRole:
-            return "" if v is None else v
+            if v is None:
+                return ""
+            # 모든 값을 문자열로 변환 (Qt의 자동 포맷팅 방지)
+            if isinstance(v, bool):
+                return "TRUE" if v else "FALSE"
+            if isinstance(v, (int, float)):
+                # 숫자는 콤마 없이 문자열로 변환
+                if isinstance(v, float):
+                    # 소수점이 .0이면 정수로 표시
+                    if v == int(v):
+                        return str(int(v))
+                    return str(v)
+                return str(v)
+            if isinstance(v, (datetime, date)):
+                return v.strftime("%Y-%m-%d")
+            # 문자열은 그대로
+            return str(v)
 
         if role == Qt.DisplayRole:
             # 수식이면 표시용으로 계산값을 보여주고, 아니면 원래 값 표시
             v_display = self._display_value(v, r=cr, c=cc)
             return self._format_value(v_display)
-
-        if role == Qt.BackgroundRole:
-            # 수정된 셀 표시(병합이면 좌상단 기준)
-            if (cr, cc) in self.dirty:
-                from PySide6.QtGui import QBrush, QColor
-                return QBrush(QColor(255, 250, 205))  # 연노랑
-            return None
 
         return None
 
@@ -215,6 +344,43 @@ class ExcelSheetModel(QAbstractTableModel):
     # ----- 유틸 -----
     def set_edit_all(self, on: bool):
         self.edit_all = bool(on)
+    
+    def _check_keywords_in_column_a(self):
+        """A열에서 키워드를 검색하고 로그 출력"""
+        keywords = ["REPAIR DATE", "건수"]
+        found_rows = []
+        
+        # A열 스캔 (1행부터 max_row까지)
+        for row in range(1, self.max_row + 1):
+            try:
+                # A열 값 읽기 (병합 셀 고려)
+                a_row, a_col = self._canonical_cell(row, 1)
+                a_cell = self.ws.cell(row=a_row, column=a_col)
+                a_value = a_cell.value
+                
+                if a_value is not None:
+                    a_value_str = str(a_value).strip().upper()
+                    # 키워드 확인
+                    for keyword in keywords:
+                        if keyword in a_value_str:
+                            found_rows.append((row, a_value))
+                            break
+            except Exception:
+                continue
+        
+        # 로그 출력
+        print(f"[시트 로드] A열 키워드 검색 결과:")
+        print(f"  - 검색 키워드: {keywords}")
+        if found_rows:
+            print(f"  - 키워드를 가진 행 발견: {len(found_rows)}개")
+            for row_num, value in found_rows[:10]:  # 최대 10개만 출력
+                print(f"    * {row_num}행: {value}")
+            if len(found_rows) > 10:
+                print(f"    ... 외 {len(found_rows) - 10}개 행")
+            print(f"  - 행 배경 색칠 적용: {len(found_rows)}개 행에 연한 파란색 배경 적용됨")
+        else:
+            print(f"  - 키워드를 가진 행 없음")
+            print(f"  - 행 배경 색칠 적용: 0개 행")
     
     # ================= Undo/Redo =================
     def can_undo(self) -> bool:
@@ -326,10 +492,10 @@ class ExcelSheetModel(QAbstractTableModel):
         if isinstance(v, bool):
             return "TRUE" if v else "FALSE"
         if isinstance(v, int):
-            return f"{v:,}"
+            return str(v)  # 콤마 제거
         if isinstance(v, float):
             # 모든 float는 정수로 반올림하여 표시 (엑셀 스타일)
-            return f"{int(round(v)):,}"
+            return str(int(round(v)))  # 콤마 제거
         if isinstance(v, (datetime, date)):
             return v.strftime("%Y-%m-%d")
         return str(v)
@@ -372,6 +538,84 @@ class ExcelSheetModel(QAbstractTableModel):
         for (r, c), v in self.dirty.items():
             self.ws.cell(row=r, column=c).value = v
         # dirty 유지(화면 표시/후속 반영용)
+    
+    def set_cell_fill_color(self, row: int, col: int, color: 'QColor'):
+        """
+        셀의 배경색 설정
+        Args:
+            row: 1-based 행 번호
+            col: 1-based 열 번호
+            color: QColor 객체
+        """
+        from openpyxl.styles import PatternFill
+        
+        cr, cc = self._canonical_cell(row, col)
+        cell = self.ws.cell(row=cr, column=cc)
+        
+        # RGB 값을 hex로 변환 (openpyxl 형식: RRGGBB)
+        hex_color = f"{color.red():02X}{color.green():02X}{color.blue():02X}"
+        fill = PatternFill(start_color=hex_color, end_color=hex_color, fill_type="solid")
+        cell.fill = fill
+        
+        # 사용자 설정 색상 저장
+        self.user_fill_colors[(cr, cc)] = color
+        
+        # 병합 범위가 있으면 범위만 갱신
+        top = (cr, cc)
+        if top in self._merge_bounds_by_top:
+            min_row, min_col, max_row, max_col = self._merge_bounds_by_top[top]
+            tl = self.index(min_row - 1, min_col - 1)
+            br = self.index(max_row - 1, max_col - 1)
+            self.dataChanged.emit(tl, br, [Qt.BackgroundRole])
+        else:
+            index = self.index(cr - 1, cc - 1)
+            self.dataChanged.emit(index, index, [Qt.BackgroundRole])
+    
+    def set_cell_font_color(self, row: int, col: int, color: 'QColor'):
+        """
+        셀의 글자색 설정
+        Args:
+            row: 1-based 행 번호
+            col: 1-based 열 번호
+            color: QColor 객체
+        """
+        from openpyxl.styles import Font
+        
+        cr, cc = self._canonical_cell(row, col)
+        cell = self.ws.cell(row=cr, column=cc)
+        
+        # RGB 값을 hex로 변환 (openpyxl 형식: RRGGBB)
+        hex_color = f"{color.red():02X}{color.green():02X}{color.blue():02X}"
+        
+        # 기존 폰트 정보 유지하면서 색상만 변경
+        if cell.font:
+            font = Font(
+                name=cell.font.name,
+                size=cell.font.size,
+                bold=cell.font.bold,
+                italic=cell.font.italic,
+                underline=cell.font.underline,
+                strike=cell.font.strike,
+                color=hex_color
+            )
+        else:
+            font = Font(color=hex_color)
+        
+        cell.font = font
+        
+        # 사용자 설정 색상 저장
+        self.user_font_colors[(cr, cc)] = color
+        
+        # 병합 범위가 있으면 범위만 갱신
+        top = (cr, cc)
+        if top in self._merge_bounds_by_top:
+            min_row, min_col, max_row, max_col = self._merge_bounds_by_top[top]
+            tl = self.index(min_row - 1, min_col - 1)
+            br = self.index(max_row - 1, max_col - 1)
+            self.dataChanged.emit(tl, br, [Qt.ForegroundRole])
+        else:
+            index = self.index(cr - 1, cc - 1)
+            self.dataChanged.emit(index, index, [Qt.ForegroundRole])
     def _display_value(self, v: Any, r: int, c: int) -> Any:
         """
         UI 표시용:

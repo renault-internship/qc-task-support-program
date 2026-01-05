@@ -15,22 +15,35 @@ class NoElideDelegate(QStyledItemDelegate):
         # 스타일 옵션 초기화
         self.initStyleOption(option, index)
         
-        # 텍스트를 제거하여 배경만 그리기
-        option.text = ""  # 텍스트를 비워서 배경만 그림
+        # ✅ 배경을 직접 그리기 (모델의 BackgroundRole 우선)
+        bg_brush = index.data(Qt.BackgroundRole)
+        if bg_brush and bg_brush.style() != Qt.NoBrush:
+            painter.fillRect(option.rect, bg_brush)
         
-        # 배경과 테두리 그리기 (선택 상태, hover 등)
-        style = option.widget.style() if option.widget else QStyle()
-        style.drawControl(QStyle.CE_ItemViewItem, option, painter, option.widget)
+        # 선택 상태 배경 (스타일시트 색상, BackgroundRole 위에 덮어씀)
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, QColor("#CCE8FF"))
+        
+        # 테두리 그리기 (선택 상태일 때)
+        if option.state & QStyle.State_Selected:
+            painter.setPen(QPen(QColor("#2196F3"), 1))
+            painter.drawRect(option.rect.adjusted(0, 0, -1, -1))
         
         # 텍스트 가져오기
         text = index.data(Qt.DisplayRole)
         if text:
             painter.save()
             
-            # 텍스트 색상 설정 (선택된 경우와 일반 경우 구분)
-            if option.state & QStyle.State_Selected:
+            # 텍스트 색상 설정 (모델의 ForegroundRole 우선)
+            text_color = index.data(Qt.ForegroundRole)
+            if text_color and isinstance(text_color, QColor):
+                # 모델에서 글자색이 설정되어 있으면 사용
+                painter.setPen(QPen(text_color))
+            elif option.state & QStyle.State_Selected:
+                # 선택된 경우
                 painter.setPen(QPen(option.palette.highlightedText().color()))
             else:
+                # 기본 텍스트 색상
                 painter.setPen(QPen(option.palette.text().color()))
             
             # 텍스트를 말줄임 없이 직접 그리기
@@ -114,9 +127,20 @@ class PreviewContainer(QWidget):
         
         # 엑셀 테이블
         self.table = QTableView()
-        self.table.setAlternatingRowColors(True)
+        self.table.setAlternatingRowColors(False)
         self.table.setSortingEnabled(True)
         self.table.setWordWrap(False)
+        
+        # 선택된 셀만 색상 지정 + 일반 item 배경색 명시적으로 허용 (모델의 BackgroundRole이 보이도록)
+        self.table.setStyleSheet("""
+            QTableView::item {
+                background: transparent !important;
+            }
+            QTableView::item:selected {
+                background-color: #CCE8FF !important;
+                color: black;
+            }
+        """)
         
         # 말줄임표 없이 전체 텍스트 표시
         self.table.setItemDelegate(NoElideDelegate(self.table))

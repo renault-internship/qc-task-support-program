@@ -23,6 +23,7 @@ from src.gui.containers import (
 from src.gui.models import ExcelSheetModel
 from src.gui.excel_filter import ExcelFilterProxyModel, ColumnFilterDialog, ColumnSelectDialog
 from src.gui.dialogs import AddRuleDialog
+from PySide6.QtGui import QColor
 
 
 class WorkerThread(QThread):
@@ -128,6 +129,12 @@ class MainPageWidget(QWidget):
         self.control_panel.get_export_final_button().clicked.connect(self.save_as_file)
         self.control_panel.get_filter_button().clicked.connect(self.on_filter_button_clicked)
         self.control_panel.get_clear_filter_button().clicked.connect(self.on_clear_filter_clicked)
+        
+        # 배경색/글자색 버튼 연결 - 색상 선택 시 선택된 셀에 즉시 적용
+        self.control_panel.get_fill_color_button().color_selected.connect(self._on_fill_color_selected)
+        self.control_panel.get_fill_color_button().color_cleared.connect(self._on_fill_color_cleared)
+        self.control_panel.get_font_color_button().color_selected.connect(self._on_font_color_selected)
+        self.control_panel.get_font_color_button().color_cleared.connect(self._on_font_color_cleared)
 
     # ================= 회사 =================
     def load_companies(self):
@@ -369,7 +376,7 @@ class MainPageWidget(QWidget):
         from src.gui.containers.preview_container import NoElideDelegate
         table.setItemDelegate(NoElideDelegate(table))
 
-        table.setAlternatingRowColors(True)
+        table.setAlternatingRowColors(False)
         table.setSortingEnabled(False)  # 컬럼 헤더 클릭 정렬 비활성화
         table.setSelectionBehavior(QAbstractItemView.SelectItems)
         table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -387,6 +394,10 @@ class MainPageWidget(QWidget):
         header = table.horizontalHeader()
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self._on_header_context_menu)
+        
+        # 테이블 셀 우클릭 메뉴 설정
+        table.setContextMenuPolicy(Qt.CustomContextMenu)
+        table.customContextMenuRequested.connect(self._on_table_context_menu)
 
         # 엑셀 레이아웃 먼저 적용
         self._apply_excel_layout(ws)
@@ -439,12 +450,15 @@ class MainPageWidget(QWidget):
             return
         if not text:
             self.proxy.setFilterRegularExpression(QRegularExpression(""))
-            return
-        rx = QRegularExpression(
-            QRegularExpression.escape(text),
-            QRegularExpression.CaseInsensitiveOption
-        )
-        self.proxy.setFilterRegularExpression(rx)
+        else:
+            rx = QRegularExpression(
+                QRegularExpression.escape(text),
+                QRegularExpression.CaseInsensitiveOption
+            )
+            self.proxy.setFilterRegularExpression(rx)
+        
+        # ✅ 검색 필터 변경 후 병합 셀 다시 적용
+        self._apply_merged_cells_only()
 
     # ================= 편집 모드 =================
     def on_edit_mode_changed(self):
@@ -734,9 +748,105 @@ class MainPageWidget(QWidget):
         # 필터 변경 후 병합 셀 다시 적용
         self._apply_merged_cells_only()
     
+    # ================= 색상 변경 =================
+    def _on_fill_color_selected(self, color: QColor):
+        """배경색 선택 시 - 색상만 저장 (즉시 적용하지 않음)"""
+        # 색상만 버튼에 저장하고, 셀에는 적용하지 않음
+        # 우클릭 메뉴를 통해서만 적용됨
+        pass
+    
+    def _on_fill_color_cleared(self):
+        """배경색 제거 시"""
+        # 색상만 제거하고, 셀에는 적용하지 않음
+        pass
+    
+    def _on_font_color_selected(self, color: QColor):
+        """글자색 선택 시 - 색상만 저장 (즉시 적용하지 않음)"""
+        # 색상만 버튼에 저장하고, 셀에는 적용하지 않음
+        # 우클릭 메뉴를 통해서만 적용됨
+        pass
+    
+    def _on_font_color_cleared(self):
+        """글자색 제거 시"""
+        # 색상만 제거하고, 셀에는 적용하지 않음
+        pass
+    
+    def _on_table_context_menu(self, pos):
+        """테이블 셀 우클릭 메뉴"""
+        if not self.model or not self.proxy:
+            return
+        
+        table = self.preview_container.get_table()
+        index = table.indexAt(pos)
+        
+        # 선택된 셀이 없으면 메뉴 표시 안 함
+        if not index.isValid():
+            return
+        
+        menu = QMenu(self)
+        
+        # 현재 선택된 색상 가져오기
+        current_fill_color = self.control_panel.get_fill_color_button().get_current_color()
+        current_font_color = self.control_panel.get_font_color_button().get_current_color()
+        
+        # 배경색 변경
+        act_fill_color = menu.addAction("배경색 변경")
+        act_fill_color.setEnabled(current_fill_color is not None)
+        
+        # 글자색 변경
+        act_font_color = menu.addAction("글자색 변경")
+        act_font_color.setEnabled(current_font_color is not None)
+        
+        picked = menu.exec(table.viewport().mapToGlobal(pos))
+        if not picked:
+            return
+        
+        if picked == act_fill_color:
+            self._apply_fill_color_to_selected(current_fill_color)
+        elif picked == act_font_color:
+            self._apply_font_color_to_selected(current_font_color)
+    
+    def _apply_fill_color_to_selected(self, color: QColor):
+        """선택된 셀들에 배경색 적용"""
+        if not self.model or not color:
+            return
+        
+        table = self.preview_container.get_table()
+        selected_indexes = table.selectionModel().selectedIndexes()
+        
+        if not selected_indexes:
+            return
+        
+        for proxy_index in selected_indexes:
+            # 프록시 인덱스를 소스 인덱스로 변환
+            source_index = self.proxy.mapToSource(proxy_index)
+            if source_index.isValid():
+                row = source_index.row() + 1  # 1-based
+                col = source_index.column() + 1  # 1-based
+                self.model.set_cell_fill_color(row, col, color)
+    
+    def _apply_font_color_to_selected(self, color: QColor):
+        """선택된 셀들에 글자색 적용"""
+        if not self.model or not color:
+            return
+        
+        table = self.preview_container.get_table()
+        selected_indexes = table.selectionModel().selectedIndexes()
+        
+        if not selected_indexes:
+            return
+        
+        for proxy_index in selected_indexes:
+            # 프록시 인덱스를 소스 인덱스로 변환
+            source_index = self.proxy.mapToSource(proxy_index)
+            if source_index.isValid():
+                row = source_index.row() + 1  # 1-based
+                col = source_index.column() + 1  # 1-based
+                self.model.set_cell_font_color(row, col, color)
+    
     def _apply_merged_cells_only(self):
-        """병합 셀만 다시 적용 (필터 변경 후)"""
-        if not self.model or not hasattr(self.model, 'ws'):
+        """병합 셀만 다시 적용 (필터 변경 후) - 프록시 인덱스로 변환"""
+        if not self.model or not hasattr(self.model, 'ws') or not self.proxy:
             return
         
         table = self.preview_container.get_table()
@@ -745,11 +855,39 @@ class MainPageWidget(QWidget):
         ws = self.model.ws
         for mr in ws.merged_cells.ranges:
             min_col, min_row, max_col, max_row = mr.bounds
-            row = min_row - 1
-            col = min_col - 1
+            
+            # 원본 인덱스 (1-based -> 0-based)
+            source_min_row = min_row - 1
+            source_min_col = min_col - 1
+            
+            # 좌상단 셀을 프록시 인덱스로 변환
+            source_top_left = self.model.index(source_min_row, source_min_col)
+            proxy_top_left = self.proxy.mapFromSource(source_top_left)
+            
+            # 프록시에서 표시되지 않으면 스킵
+            if not proxy_top_left.isValid():
+                continue
+            
+            # 병합 범위의 모든 행이 프록시에서 표시되는지 확인
+            all_visible = True
+            for r in range(source_min_row, min(max_row, self.model.rowCount())):
+                source_idx = self.model.index(r, source_min_col)
+                proxy_idx = self.proxy.mapFromSource(source_idx)
+                if not proxy_idx.isValid():
+                    all_visible = False
+                    break
+            
+            # 모든 행이 표시되지 않으면 스킵
+            if not all_visible:
+                continue
+            
+            # 프록시 인덱스로 병합 적용
+            proxy_row = proxy_top_left.row()
+            proxy_col = proxy_top_left.column()
             row_span = max_row - min_row + 1
             col_span = max_col - min_col + 1
-            table.setSpan(row, col, row_span, col_span)
+            
+            table.setSpan(proxy_row, proxy_col, row_span, col_span)
     
     # ================= 엑셀 레이아웃 =================
     def _apply_excel_layout(self, ws):
