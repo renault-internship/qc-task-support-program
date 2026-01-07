@@ -94,26 +94,43 @@ class RuleManagementWidget(QWidget):
         # 제목
         from PySide6.QtWidgets import QLabel, QGroupBox, QTextEdit
         self.title_label = QLabel("협력사를 선택하세요")
-        self.title_label.setStyleSheet("font-size: 10pt; font-weight: normal;")
+        self.title_label.setStyleSheet("font-size: 12pt; font-weight: bold;")
         layout.addWidget(self.title_label)
         
         # 상단: Remark 영역
-        remark_group = QGroupBox("Remark")
-        remark_layout = QVBoxLayout()
+        remark_group = QGroupBox()
+        remark_group.setStyleSheet("QGroupBox { border: 1px solid #ccc; border-radius: 3px; margin-top: 10px; padding-top: 10px; }")
+        remark_layout = QVBoxLayout(remark_group)
+        remark_layout.setContentsMargins(4, 8, 4, 8)
+        remark_layout.setSpacing(6)
+        
+        # Remark 제목과 저장 버튼을 같은 줄에 배치 (우측 상단)
+        remark_title_widget = QWidget()
+        remark_title_layout = QHBoxLayout(remark_title_widget)
+        remark_title_layout.setContentsMargins(0, 0, 0, 0)
+        remark_title_layout.setSpacing(0)
+        
+        lbl_remark_title = QLabel("Remark")
+        lbl_remark_title.setStyleSheet("font-weight: bold; font-size: 10pt; color: #555;")
+        remark_title_layout.addWidget(lbl_remark_title)
+        remark_title_layout.addStretch()
+        
+        self.btn_save_remark = QPushButton("저장")
+        self.btn_save_remark.setEnabled(False)
+        # 저장 버튼 높이를 제목 텍스트 높이와 맞추기
+        self.btn_save_remark.setFixedHeight(20)
+        remark_title_layout.addWidget(self.btn_save_remark)
+        
+        # 제목 위젯의 높이를 고정하여 적용 규칙 제목과 동일한 높이 유지
+        remark_title_widget.setFixedHeight(20)
+        remark_layout.addWidget(remark_title_widget)
+        
+        # Remark 텍스트 영역
         self.remark_text = QTextEdit()
         self.remark_text.setReadOnly(False)  # 편집 가능
         self.remark_text.setMaximumHeight(100)
         remark_layout.addWidget(self.remark_text)
         
-        # Remark 저장 버튼
-        remark_button_layout = QHBoxLayout()
-        remark_button_layout.addStretch()
-        self.btn_save_remark = QPushButton("저장")
-        self.btn_save_remark.setEnabled(False)
-        remark_button_layout.addWidget(self.btn_save_remark)
-        remark_layout.addLayout(remark_button_layout)
-        
-        remark_group.setLayout(remark_layout)
         layout.addWidget(remark_group)
         
         # 버튼들
@@ -136,6 +153,7 @@ class RuleManagementWidget(QWidget):
         
         # 하단: Rule 테이블 전체 출력
         rule_group = QGroupBox("규칙 테이블")
+        rule_group.setStyleSheet("QGroupBox::title { color: black; font-size: 12pt; font-weight: bold; }")
         rule_layout = QVBoxLayout()
         self.table = QTableWidget()
         self.table.horizontalHeader().setStretchLastSection(True)

@@ -296,9 +296,6 @@ class MainPageWidget(QWidget):
         # 전처리 버튼 상태 업데이트
         self._update_preprocess_button_state()
         
-        remark = f"{'국내' if file_type == 'domestic' else '해외'} 청구서 업로드 완료. 전처리 전 상태"
-        self.info_panel.set_remark(remark)
-        
         # 모든 처리가 끝난 후 로딩 애니메이션 숨김
         QApplication.processEvents()
         self.preview_container.hide_loading()
@@ -557,8 +554,6 @@ class MainPageWidget(QWidget):
 
         # 전처리 버튼 상태 업데이트
         self._update_preprocess_button_state()
-
-        self.info_panel.set_remark("전처리 완료. 미리보기 갱신됨")
         
         # 시트 다시 로드 (무거운 작업)
         self.load_sheet(current_sheet)
