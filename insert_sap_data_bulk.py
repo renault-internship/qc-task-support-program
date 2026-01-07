@@ -1,12 +1,10 @@
 """
 SAP 테이블에 협력사 데이터 대량 추가 스크립트
 - 중복된 협력사는 제외
-- 룰 테이블이 이미 있으면 건너뛰기
+- 룰 테이블은 rule_{sap_code} 로 자동 생성(이미 있으면 그대로)
 사용법: python insert_sap_data_bulk.py
 """
-import sqlite3
-from pathlib import Path
-from src.database import init_database, get_company_info, create_rule_table, DB_PATH
+from src.database import init_database, get_company_info, upsert_company
 
 # 데이터베이스 초기화
 init_database()
@@ -120,10 +118,6 @@ suppliers = [
     {"sap_name": "Korea Fuel-Tech Corporation", "sap_code": "C917", "renault_code": "253253"},
 ]
 
-# 디폴트값
-default_warranty_mileage = 60000
-default_warranty_period = 3 * 365  # 3년을 일 단위로 변환 (1095일)
-
 print("SAP 테이블에 협력사 데이터 대량 추가 중...")
 print("=" * 70)
 print(f"총 {len(suppliers)}개 협력사 처리 예정")
@@ -133,63 +127,39 @@ added_count = 0
 skipped_count = 0
 error_count = 0
 
-conn = sqlite3.connect(str(DB_PATH))
-cursor = conn.cursor()
-
 for supplier in suppliers:
     sap_code = supplier["sap_code"]
     sap_name = supplier["sap_name"]
     renault_code = supplier["renault_code"]
-    
-    # rule_table_name 자동 생성
+
     rule_table_name = f"rule_{sap_code}"
-    
+
     try:
-        # 기존 데이터 확인 (중복 체크)
+        # ✅ 중복이면 스킵
         existing = get_company_info(sap_code)
-        
         if existing:
-            # 이미 존재하는 협력사는 건너뛰기
             print(f"⊘ 건너뜀: {sap_name} ({sap_code}) - 이미 존재함")
             skipped_count += 1
             continue
-        
-        # 새 협력사 추가
-        cursor.execute("""
-            INSERT INTO sap (sap_code, sap_name, warranty_mileage, warranty_period, rule_table_name, renault_code)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (sap_code, sap_name, default_warranty_mileage, default_warranty_period, rule_table_name, renault_code))
-        
-        # 룰 테이블 생성 (이미 있으면 건너뛰기)
-        try:
-            create_rule_table(rule_table_name, cursor)
-            print(f"✓ 추가: {sap_name} ({sap_code}) - RENAULT CODE: {renault_code} [룰 테이블 생성됨]")
-        except Exception as e:
-            # 룰 테이블이 이미 있거나 생성 실패해도 협력사는 저장됨
-            error_msg = str(e)
-            if "이미 존재" in error_msg or "already exists" in error_msg.lower():
-                print(f"✓ 추가: {sap_name} ({sap_code}) - RENAULT CODE: {renault_code} [룰 테이블 이미 존재]")
-            else:
-                print(f"⚠ 추가: {sap_name} ({sap_code}) - RENAULT CODE: {renault_code} [룰 테이블 생성 실패: {error_msg}]")
-        
+
+        # ✅ warranty는 전역 1행으로 따로 관리하니까 여기서 절대 건드리지 않음
+        upsert_company(
+            sap_code=sap_code,
+            sap_name=sap_name,
+            renault_code=renault_code,
+            rule_table_name=rule_table_name,
+        )
+
+        print(f"✓ 추가: {sap_name} ({sap_code}) - RENAULT CODE: {renault_code}")
         added_count += 1
-        
-    except sqlite3.IntegrityError as e:
-        # 중복 키 에러 (다른 방식으로 중복이 감지된 경우)
-        print(f"⊘ 건너뜀: {sap_name} ({sap_code}) - 중복 키 에러")
-        skipped_count += 1
+
     except Exception as e:
         print(f"✗ 오류: {sap_name} ({sap_code}) - {str(e)}")
         error_count += 1
 
-# 모든 변경사항 커밋
-conn.commit()
-conn.close()
-
 print("=" * 70)
-print(f"처리 완료!")
+print("처리 완료!")
 print(f"  - 추가됨: {added_count}개")
 print(f"  - 건너뜀: {skipped_count}개 (중복)")
 print(f"  - 오류: {error_count}개")
 print("=" * 70)
-
