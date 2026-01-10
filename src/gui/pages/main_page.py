@@ -61,6 +61,9 @@ class MainPageWidget(QWidget):
         # 전처리 상태 추적
         self.preprocessed_domestic: bool = False
         self.preprocessed_overseas: bool = False
+        # 전처리 결과 저장
+        self.preprocess_result_domestic = None
+        self.preprocess_result_overseas = None
 
         # ================= 컨테이너 생성 =================
         self.control_panel = ControlPanel(self)
@@ -499,18 +502,21 @@ class MainPageWidget(QWidget):
 
         # 현재 시트의 워크북 찾기
         file_type = None
+        repair_region = None
         if current_sheet.startswith("국내: "):
             if not self.wb_domestic:
                 QMessageBox.information(self, "안내", "국내 청구서가 없습니다.")
                 return
             wb = self.wb_domestic
             file_type = "domestic"
+            repair_region = "DOMESTIC"
         elif current_sheet.startswith("해외: "):
             if not self.wb_overseas:
                 QMessageBox.information(self, "안내", "해외 청구서가 없습니다.")
                 return
             wb = self.wb_overseas
             file_type = "overseas"
+            repair_region = "OVERSEAS"
         else:
             QMessageBox.information(self, "안내", "시트를 선택하세요.")
             return
@@ -521,6 +527,19 @@ class MainPageWidget(QWidget):
             return
         elif file_type == "overseas" and self.preprocessed_overseas:
             QMessageBox.information(self, "안내", "해외 청구서는 이미 전처리되었습니다.")
+            return
+        
+        # 회사 정보 확인
+        if not self.current_company_info:
+            QMessageBox.information(self, "안내", "먼저 COMEX(협력사)를 선택하세요.")
+            return
+        
+        company_code = self.current_company_info.get("sap_code")
+        company_name = self.current_company_info.get("sap_name", "")
+        rule_table_name = self.current_company_info.get("rule_table_name")
+        
+        if not rule_table_name:
+            QMessageBox.warning(self, "경고", "선택한 협력사에 룰 테이블이 설정되지 않았습니다.")
             return
 
         if self.model:
@@ -536,21 +555,29 @@ class MainPageWidget(QWidget):
             self.preview_container.get_table().setModel(None)
         
         # 백그라운드에서 전처리 실행
-        company = self.control_panel.get_company_edit().text().strip()
-        keyword = self.control_panel.get_search_edit().text().strip()
+        from src.excel_processor import preprocess_inplace
         
-        self.process_worker = WorkerThread(preprocess_inplace, wb, company=company, keyword=keyword)
-        self.process_worker.finished.connect(lambda _: self._on_preprocess_finished(file_type, current_sheet))
+        self.process_worker = WorkerThread(
+            preprocess_inplace,
+            wb,
+            company_code=company_code,
+            company_name=company_name,
+            rule_table_name=rule_table_name,
+            repair_region=repair_region
+        )
+        self.process_worker.finished.connect(lambda result: self._on_preprocess_finished(file_type, current_sheet, result))
         self.process_worker.error.connect(self._on_worker_error)
         self.process_worker.start()
 
-    def _on_preprocess_finished(self, file_type, current_sheet):
+    def _on_preprocess_finished(self, file_type, current_sheet, result):
         """전처리 완료 시 호출되는 콜백"""
-        # 전처리 상태 업데이트
+        # 전처리 상태 및 결과 저장
         if file_type == "domestic":
             self.preprocessed_domestic = True
+            self.preprocess_result_domestic = result
         else:
             self.preprocessed_overseas = True
+            self.preprocess_result_overseas = result
 
         # 전처리 버튼 상태 업데이트
         self._update_preprocess_button_state()
@@ -561,6 +588,11 @@ class MainPageWidget(QWidget):
         # 모든 처리가 끝난 후 로딩 애니메이션 숨김
         QApplication.processEvents()
         self.preview_container.hide_loading()
+        
+        # 결과 팝업 표시
+        from src.gui.dialogs import PreprocessResultDialog
+        dialog = PreprocessResultDialog(result, self)
+        dialog.exec()
 
     def _on_worker_error(self, message):
         """작업 도중 에러 발생 시 호출되는 콜백"""
@@ -581,21 +613,52 @@ class MainPageWidget(QWidget):
         # 현재 시트 타입 확인
         if current_sheet.startswith("국내: "):
             if self.preprocessed_domestic:
-                btn_preprocess.setText("전처리완료")
-                btn_preprocess.setEnabled(False)
+                btn_preprocess.setText("전처리 통계 보기")
+                btn_preprocess.setEnabled(True)
+                # 버튼 클릭 이벤트 재연결
+                try:
+                    btn_preprocess.clicked.disconnect()
+                except:
+                    pass
+                btn_preprocess.clicked.connect(lambda: self._show_preprocess_result("domestic"))
             else:
                 btn_preprocess.setText("전처리")
                 btn_preprocess.setEnabled(True)
+                try:
+                    btn_preprocess.clicked.disconnect()
+                except:
+                    pass
+                btn_preprocess.clicked.connect(self.on_preprocess_clicked)
         elif current_sheet.startswith("해외: "):
             if self.preprocessed_overseas:
-                btn_preprocess.setText("전처리완료")
-                btn_preprocess.setEnabled(False)
+                btn_preprocess.setText("전처리 통계 보기")
+                btn_preprocess.setEnabled(True)
+                try:
+                    btn_preprocess.clicked.disconnect()
+                except:
+                    pass
+                btn_preprocess.clicked.connect(lambda: self._show_preprocess_result("overseas"))
             else:
                 btn_preprocess.setText("전처리")
                 btn_preprocess.setEnabled(True)
+                try:
+                    btn_preprocess.clicked.disconnect()
+                except:
+                    pass
+                btn_preprocess.clicked.connect(self.on_preprocess_clicked)
         else:
             btn_preprocess.setText("전처리")
             btn_preprocess.setEnabled(True)
+    
+    def _show_preprocess_result(self, file_type: str):
+        """전처리 통계 보기"""
+        result = self.preprocess_result_domestic if file_type == "domestic" else self.preprocess_result_overseas
+        if result:
+            from src.gui.dialogs import PreprocessResultDialog
+            dialog = PreprocessResultDialog(result, self)
+            dialog.exec()
+        else:
+            QMessageBox.information(self, "안내", "전처리 결과가 없습니다.")
 
     # ================= 저장 =================
     def save_as_file(self):

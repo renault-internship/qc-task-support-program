@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QFormLayout, QHBoxLayout, QVBoxLayout,
     QPushButton, QSpinBox, QDoubleSpinBox, QLineEdit,
-    QComboBox, QTableWidget, QTableWidgetItem, QGroupBox, QLabel, QWidget, QFrame, QCheckBox
+    QComboBox, QTableWidget, QTableWidgetItem, QGroupBox, QLabel, QWidget, QFrame, QCheckBox, QTextEdit
 )
 
 
@@ -598,7 +598,7 @@ class ViewRulesDialog(QDialog):
         # 구상율 (항상 표시)
         liability_ratio = rule.get("liability_ratio")
         if liability_ratio is not None:
-            changes.append(f"구상율: {liability_ratio}%")
+            changes.append(f"구상율: {liability_ratio * 100:.0f}%")
         
         # 보증 주행거리 오버라이드 (NULL이 아닐 때만)
         warranty_mileage = rule.get("warranty_mileage_override")
@@ -660,4 +660,571 @@ class ViewRulesDialog(QDialog):
             self.table.setItem(row, 2, changes_item)
         
         self.table.resizeColumnsToContents()
+
+
+class PreprocessResultDialog(QDialog):
+    """전처리 결과 표시 다이얼로그"""
+    def __init__(self, result, parent=None):
+        """
+        Args:
+            result: PreprocessResult 객체
+        """
+        super().__init__(parent)
+        self.result = result
+        self.setWindowTitle("청구서 전처리 결과 보고서")
+        self.setMinimumSize(1000, 800)
+        
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(10)
+        
+        # 제목
+        title_label = QLabel("청구서 전처리 결과 보고서")
+        title_label.setStyleSheet("font-size: 18pt; font-weight: bold; color: #2c3e50;")
+        title_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(title_label)
+        
+        # 처리 일시
+        time_label = QLabel(f"처리일시: {self.result.process_time}")
+        time_label.setStyleSheet("font-size: 10pt; color: #6c757d;")
+        time_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(time_label)
+        
+        # 구분선
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(line)
+        
+        # 스크롤 영역
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setSpacing(15)
+        
+        # 1. 기본 정보
+        scroll_layout.addWidget(self._create_basic_info_section())
+        
+        # 2. 처리 결과 요약
+        scroll_layout.addWidget(self._create_summary_section())
+        
+        # 3. 차계 및 프로젝트 분포
+        scroll_layout.addWidget(self._create_project_section())
+        
+        # 4. 구상률 적용
+        scroll_layout.addWidget(self._create_liability_section())
+        
+        # 5. 보증 기준
+        scroll_layout.addWidget(self._create_warranty_section())
+        
+        # 6. 룰 사용 현황
+        scroll_layout.addWidget(self._create_rule_usage_section())
+        
+        # 7. 예외 사항
+        if self.result.warnings:
+            scroll_layout.addWidget(self._create_warnings_section())
+        
+        # 8. 비고 (제일 아래)
+        scroll_layout.addWidget(self._create_remarks_section())
+        
+        scroll.setWidget(scroll_content)
+        main_layout.addWidget(scroll)
+        
+        # 닫기 버튼
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_close = QPushButton("확인")
+        btn_close.setFixedWidth(120)
+        btn_close.setFixedHeight(35)
+        btn_close.setStyleSheet("""
+            QPushButton {
+                background-color: #0d6efd;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 11pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0b5ed7;
+            }
+        """)
+        btn_close.clicked.connect(self.accept)
+        btn_layout.addWidget(btn_close)
+        main_layout.addLayout(btn_layout)
+        
+        self.setLayout(main_layout)
+    
+    def _create_section_box(self, title: str, icon: str = "") -> QWidget:
+        """섹션 위젯 생성 (테두리 없음)"""
+        container = QWidget()
+        container.setStyleSheet("background-color: white;")
+        
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 10, 0, 10)  # 상하 패딩 균등하게
+        layout.setSpacing(8)
+        
+        # 제목
+        title_label = QLabel(title)
+        title_label.setStyleSheet("""
+            font-size: 13pt;
+            font-weight: bold;
+            color: #2c3e50;
+            padding: 0;
+            margin: 0;
+        """)
+        layout.addWidget(title_label)
+        
+        # 내용 컨테이너
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 5, 0, 0)  # 제목과 내용 사이 간격
+        layout.addWidget(content)
+        
+        # 하단 구분선
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("color: #dee2e6;")
+        layout.addWidget(separator)
+        
+        container.content_layout = content_layout
+        return container
+    
+    def _create_info_row(self, label: str, value: str) -> QHBoxLayout:
+        """정보 행 생성"""
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        
+        lbl = QLabel(f"• {label}:")
+        lbl.setStyleSheet("font-size: 10pt; font-weight: bold; color: #495057;")
+        lbl.setFixedWidth(150)
+        
+        val = QLabel(value)
+        val.setStyleSheet("font-size: 10pt; color: #212529;")
+        
+        row.addWidget(lbl)
+        row.addWidget(val)
+        row.addStretch()
+        
+        return row
+    
+    def _create_stat_card(self, label: str, value: str, color: str = "#0d6efd") -> QWidget:
+        """통계 카드 생성"""
+        card = QWidget()
+        card.setFixedHeight(100)  # 높이 고정
+        card.setStyleSheet(f"""
+            QWidget {{
+                background-color: {color};
+                border-radius: 8px;
+            }}
+        """)
+        
+        layout = QVBoxLayout(card)
+        layout.setSpacing(2)
+        layout.setContentsMargins(10, 15, 10, 15)
+        
+        val_label = QLabel(value)
+        val_label.setStyleSheet("font-size: 28pt; font-weight: bold; color: white;")
+        val_label.setAlignment(Qt.AlignCenter)
+        
+        lbl_label = QLabel(label)
+        lbl_label.setStyleSheet("font-size: 11pt; color: white;")
+        lbl_label.setAlignment(Qt.AlignCenter)
+        lbl_label.setWordWrap(True)
+        
+        layout.addWidget(val_label)
+        layout.addWidget(lbl_label)
+        
+        return card
+    
+    def _create_basic_info_section(self) -> QWidget:
+        """기본 정보 섹션"""
+        box = self._create_section_box("청구서 정보")
+        
+        region_text = "국내 청구서" if self.result.repair_region == "DOMESTIC" else "해외 청구서"
+        box.content_layout.addLayout(self._create_info_row("유형", region_text))
+        box.content_layout.addLayout(self._create_info_row("협력사", f"{self.result.company_name} ({self.result.company_code})"))
+        box.content_layout.addLayout(self._create_info_row("룰 테이블", self.result.rule_table_name))
+        
+        return box
+    
+    def _create_summary_section(self) -> QWidget:
+        """처리 결과 요약 섹션"""
+        box = self._create_section_box("처리 결과 요약")
+        
+        # 통계 카드들
+        cards_layout = QHBoxLayout()
+        cards_layout.setSpacing(15)
+        
+        cards_layout.addWidget(self._create_stat_card("총 청구 건수", f"{self.result.total_rows:,}", "#6c757d"))
+        cards_layout.addWidget(self._create_stat_card("정상 처리", f"{self.result.success_rows:,}", "#28a745"))
+        cards_layout.addWidget(self._create_stat_card("예외 처리", f"{self.result.warning_rows:,}", "#ffc107"))
+        cards_layout.addWidget(self._create_stat_card("오류 발생", f"{self.result.error_rows:,}", "#dc3545"))
+        
+        box.content_layout.addLayout(cards_layout)
+        
+        return box
+    
+    def _create_project_section(self) -> QWidget:
+        """차계 및 프로젝트 분포 섹션"""
+        box = self._create_section_box("차계 및 프로젝트 코드 분석")
+        
+        if self.result.project_stats:
+            table = QTableWidget()
+            table.setColumnCount(4)
+            table.setHorizontalHeaderLabels(["프로젝트 코드", "건수", "비율", "기본 구상률"])
+            table.setRowCount(len(self.result.project_stats))
+            
+            table.horizontalHeader().setStretchLastSection(True)
+            table.verticalHeader().setVisible(False)
+            table.setAlternatingRowColors(True)
+            table.setStyleSheet("""
+                QTableWidget {
+                    border: 1px solid #dee2e6;
+                    gridline-color: #dee2e6;
+                }
+                QHeaderView::section {
+                    background-color: #e9ecef;
+                    padding: 8px;
+                    border: 1px solid #dee2e6;
+                    font-weight: bold;
+                }
+            """)
+            
+            total = self.result.total_rows
+            for row, (project_code, (count, ratio)) in enumerate(sorted(self.result.project_stats.items(), key=lambda x: x[1][0], reverse=True)):
+                percentage = (count / total * 100) if total > 0 else 0
+                ratio_str = f"{ratio * 100:.0f}%" if ratio is not None else "미설정"
+                
+                table.setItem(row, 0, QTableWidgetItem(project_code))
+                table.setItem(row, 1, QTableWidgetItem(f"{count:,}건"))
+                table.setItem(row, 2, QTableWidgetItem(f"{percentage:.1f}%"))
+                table.setItem(row, 3, QTableWidgetItem(ratio_str))
+                
+                # 중앙 정렬
+                for col in range(4):
+                    table.item(row, col).setTextAlignment(Qt.AlignCenter)
+            
+            table.resizeColumnsToContents()
+            table.setMaximumHeight(min(300, 50 + len(self.result.project_stats) * 35))
+            
+            box.content_layout.addWidget(table)
+        else:
+            no_data = QLabel("프로젝트 통계 없음")
+            no_data.setStyleSheet("font-size: 10pt; color: #6c757d; padding: 20px;")
+            no_data.setAlignment(Qt.AlignCenter)
+            box.content_layout.addWidget(no_data)
+        
+        return box
+    
+    def _create_liability_section(self) -> QWidget:
+        """구상률 적용 섹션"""
+        box = self._create_section_box("구상률 적용 내역")
+        
+        # 기본 구상률
+        basic_widget = QWidget()
+        basic_layout = QVBoxLayout(basic_widget)
+        basic_layout.setContentsMargins(10, 10, 10, 10)
+        basic_widget.setStyleSheet("background-color: #f8f9fa; border-radius: 5px;")
+        
+        basic_title = QLabel("기본 구상률 적용 (Common Project Liability)")
+        basic_title.setStyleSheet("font-size: 10pt; font-weight: bold; color: #495057;")
+        basic_layout.addWidget(basic_title)
+        
+        basic_value = QLabel(f"적용 건수: {self.result.common_liability_applied:,}건")
+        basic_value.setStyleSheet("font-size: 10pt; color: #212529; padding-left: 10px;")
+        basic_layout.addWidget(basic_value)
+        
+        box.content_layout.addWidget(basic_widget)
+        
+        # 세부 룰
+        rule_widget = QWidget()
+        rule_layout = QVBoxLayout(rule_widget)
+        rule_layout.setContentsMargins(10, 10, 10, 10)
+        rule_widget.setStyleSheet("background-color: #f8f9fa; border-radius: 5px;")
+        
+        rule_title = QLabel("세부 룰에 의한 구상률 변경")
+        rule_title.setStyleSheet("font-size: 10pt; font-weight: bold; color: #495057;")
+        rule_layout.addWidget(rule_title)
+        
+        if self.result.liability_ratio_rules_applied > 0:
+            rule_value = QLabel(f"룰 적용 건수: {self.result.liability_ratio_rules_applied:,}건")
+            rule_value.setStyleSheet("font-size: 10pt; color: #212529; padding-left: 10px;")
+            rule_layout.addWidget(rule_value)
+            
+            rule_desc = QLabel(f"총 {self.result.liability_ratio_rules_applied:,}건의 구상률이 세부 룰로 오버라이드됨")
+            rule_desc.setStyleSheet("font-size: 9pt; color: #6c757d; padding-left: 10px;")
+            rule_layout.addWidget(rule_desc)
+        else:
+            no_rule = QLabel("적용된 구상률 변경 없음")
+            no_rule.setStyleSheet("font-size: 10pt; color: #6c757d; padding-left: 10px;")
+            rule_layout.addWidget(no_rule)
+        
+        box.content_layout.addWidget(rule_widget)
+        
+        return box
+    
+    def _create_warranty_section(self) -> QWidget:
+        """보증 기준 및 초과 섹션 (통합)"""
+        box = self._create_section_box("보증 주행거리 및 보증 기간")
+        
+        # 기본값
+        default_widget = QWidget()
+        default_layout = QVBoxLayout(default_widget)
+        default_layout.setContentsMargins(10, 10, 10, 10)
+        default_widget.setStyleSheet("background-color: #e7f3ff; border-radius: 5px;")
+        
+        default_title = QLabel("기본 보증 기준")
+        default_title.setStyleSheet("font-size: 10pt; font-weight: bold; color: #004085;")
+        default_layout.addWidget(default_title)
+        
+        default_mileage = QLabel(f"• 보증 주행거리: {self.result.default_mileage_threshold:,}km")
+        default_mileage.setStyleSheet("font-size: 10pt; color: #004085; padding-left: 10px;")
+        default_layout.addWidget(default_mileage)
+        
+        default_period = QLabel(f"• 보증 기간: {self.result.default_warranty_years}년")
+        default_period.setStyleSheet("font-size: 10pt; color: #004085; padding-left: 10px;")
+        default_layout.addWidget(default_period)
+        
+        box.content_layout.addWidget(default_widget)
+        
+        # 오버라이드
+        if self.result.mileage_overrides or self.result.period_overrides:
+            override_widget = QWidget()
+            override_layout = QVBoxLayout(override_widget)
+            override_layout.setContentsMargins(10, 10, 10, 10)
+            override_widget.setStyleSheet("background-color: #fff3cd; border-radius: 5px;")
+            
+            override_title = QLabel("세부 룰에 의한 변경")
+            override_title.setStyleSheet("font-size: 10pt; font-weight: bold; color: #856404;")
+            override_layout.addWidget(override_title)
+            
+            if self.result.mileage_overrides:
+                for mileage, count in sorted(self.result.mileage_overrides.items()):
+                    lbl = QLabel(f"• 보증 주행거리 {mileage:,}km 적용: {count:,}건")
+                    lbl.setStyleSheet("font-size: 10pt; color: #856404; padding-left: 10px;")
+                    override_layout.addWidget(lbl)
+            
+            if self.result.period_overrides:
+                for years, count in sorted(self.result.period_overrides.items()):
+                    lbl = QLabel(f"• 보증 기간 {years}년 적용: {count:,}건")
+                    lbl.setStyleSheet("font-size: 10pt; color: #856404; padding-left: 10px;")
+                    override_layout.addWidget(lbl)
+            
+            box.content_layout.addWidget(override_widget)
+        
+        # 보증 범위 초과 통계
+        exceeded_widget = QWidget()
+        exceeded_layout = QVBoxLayout(exceeded_widget)
+        exceeded_layout.setContentsMargins(10, 10, 10, 10)
+        exceeded_widget.setStyleSheet("background-color: #f8d7da; border-radius: 5px;")
+        
+        exceeded_title = QLabel("보증 범위 초과 (구상률 0% 적용)")
+        exceeded_title.setStyleSheet("font-size: 10pt; font-weight: bold; color: #721c24;")
+        exceeded_layout.addWidget(exceeded_title)
+        
+        exceeded_layout.addLayout(self._create_info_row("주행거리 초과", f"{self.result.mileage_exceeded_rows:,}건"))
+        exceeded_layout.addLayout(self._create_info_row("보증기간 초과", f"{self.result.period_exceeded_rows:,}건"))
+        exceeded_layout.addLayout(self._create_info_row("중복 초과 (거리+기간)", f"{self.result.both_exceeded_rows:,}건"))
+        
+        # 구분선
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color: #dc3545;")
+        exceeded_layout.addWidget(sep)
+        
+        total_lbl = QLabel(f"총 개수: {self.result.warranty_highlighted_rows:,}개 (노란색 하이라이트)")
+        total_lbl.setStyleSheet("font-size: 11pt; font-weight: bold; color: #721c24;")
+        exceeded_layout.addWidget(total_lbl)
+        
+        box.content_layout.addWidget(exceeded_widget)
+        
+        return box
+    
+    def _create_rule_usage_section(self) -> QWidget:
+        """룰 사용 현황 섹션"""
+        box = self._create_section_box("룰 사용 현황")
+        
+        # 요약
+        total_rules = len(self.result.rule_usage) + len(self.result.unused_rules)
+        summary_layout = QHBoxLayout()
+        summary_layout.setSpacing(10)
+        
+        total_lbl = QLabel(f"총 활성 룰: {total_rules}개")
+        total_lbl.setStyleSheet("font-size: 10pt; font-weight: bold;")
+        
+        used_lbl = QLabel(f"적용됨: {len(self.result.rule_usage)}개")
+        used_lbl.setStyleSheet("font-size: 10pt; color: #28a745;")
+        
+        unused_lbl = QLabel(f"미적용: {len(self.result.unused_rules)}개")
+        unused_lbl.setStyleSheet("font-size: 10pt; color: #dc3545;")
+        
+        summary_layout.addWidget(total_lbl)
+        summary_layout.addWidget(used_lbl)
+        summary_layout.addWidget(unused_lbl)
+        summary_layout.addStretch()
+        
+        box.content_layout.addLayout(summary_layout)
+        
+        # 적용된 룰 테이블
+        if self.result.rule_usage:
+            used_title = QLabel("적용된 룰")
+            used_title.setStyleSheet("font-size: 10pt; font-weight: bold; color: #28a745; margin-top: 10px;")
+            box.content_layout.addWidget(used_title)
+            
+            used_table = QTableWidget()
+            used_table.setColumnCount(3)
+            used_table.setHorizontalHeaderLabels(["룰 ID", "설명", "적용 횟수"])
+            
+            display_count = min(10, len(self.result.rule_usage))
+            used_table.setRowCount(display_count)
+            
+            for row, (rule_id, (desc, count)) in enumerate(sorted(self.result.rule_usage.items(), key=lambda x: x[1][1], reverse=True)[:10]):
+                used_table.setItem(row, 0, QTableWidgetItem(f"R-{rule_id}"))
+                used_table.setItem(row, 1, QTableWidgetItem(desc))
+                used_table.setItem(row, 2, QTableWidgetItem(f"{count:,}회"))
+                
+                used_table.item(row, 0).setTextAlignment(Qt.AlignCenter)
+                used_table.item(row, 2).setTextAlignment(Qt.AlignCenter)
+            
+            used_table.horizontalHeader().setStretchLastSection(True)
+            used_table.horizontalHeader().setStyleSheet("QHeaderView::section { background-color: #e9ecef; font-weight: bold; }")
+            used_table.setAlternatingRowColors(True)
+            used_table.resizeColumnsToContents()
+            used_table.setMaximumHeight(min(300, 50 + display_count * 35))
+            
+            box.content_layout.addWidget(used_table)
+            
+            if len(self.result.rule_usage) > 10:
+                more_lbl = QLabel(f"... 외 {len(self.result.rule_usage) - 10}개 더")
+                more_lbl.setStyleSheet("font-size: 9pt; color: #6c757d;")
+                box.content_layout.addWidget(more_lbl)
+        
+        # 미적용 룰 테이블
+        if self.result.unused_rules:
+            unused_title = QLabel("미적용 룰 (확인 필요)")
+            unused_title.setStyleSheet("font-size: 10pt; font-weight: bold; color: #dc3545; margin-top: 10px;")
+            box.content_layout.addWidget(unused_title)
+            
+            unused_table = QTableWidget()
+            unused_table.setColumnCount(3)
+            unused_table.setHorizontalHeaderLabels(["룰 ID", "설명", "미적용 이유"])
+            
+            display_count = min(10, len(self.result.unused_rules))
+            unused_table.setRowCount(display_count)
+            
+            for row, (rule_id, desc, reason) in enumerate(self.result.unused_rules[:10]):
+                unused_table.setItem(row, 0, QTableWidgetItem(f"R-{rule_id}"))
+                unused_table.setItem(row, 1, QTableWidgetItem(desc))
+                unused_table.setItem(row, 2, QTableWidgetItem(reason))
+                
+                unused_table.item(row, 0).setTextAlignment(Qt.AlignCenter)
+            
+            unused_table.horizontalHeader().setStretchLastSection(True)
+            unused_table.horizontalHeader().setStyleSheet("QHeaderView::section { background-color: #e9ecef; font-weight: bold; }")
+            unused_table.setAlternatingRowColors(True)
+            unused_table.resizeColumnsToContents()
+            unused_table.setMaximumHeight(min(300, 50 + display_count * 35))
+            
+            box.content_layout.addWidget(unused_table)
+            
+            if len(self.result.unused_rules) > 10:
+                more_lbl = QLabel(f"... 외 {len(self.result.unused_rules) - 10}개 더")
+                more_lbl.setStyleSheet("font-size: 9pt; color: #6c757d;")
+                box.content_layout.addWidget(more_lbl)
+            
+            # 권장 조치
+            advice = QLabel("미적용 룰의 조건을 검토하거나 우선순위 조정이 필요합니다.")
+            advice.setStyleSheet("font-size: 9pt; color: #856404; background-color: #fff3cd; padding: 8px; border-radius: 4px; margin-top: 5px;")
+            advice.setWordWrap(True)
+            box.content_layout.addWidget(advice)
+        
+        return box
+    
+    def _create_remarks_section(self) -> QWidget:
+        """비고 섹션 (특이사항만 기록)"""
+        box = self._create_section_box("비고")
+        
+        remarks_widget = QWidget()
+        remarks_layout = QVBoxLayout(remarks_widget)
+        remarks_layout.setContentsMargins(10, 10, 10, 10)
+        remarks_widget.setStyleSheet("background-color: #f8f9fa; border-radius: 5px; border: 1px solid #dee2e6;")
+        
+        # 비고가 있으면 표시, 없으면 "기타 특이사항 없음"
+        if self.result.remarks:
+            remarks_text = QTextEdit()
+            remarks_text.setReadOnly(True)
+            remarks_text.setPlainText("\n".join(self.result.remarks))
+            remarks_text.setStyleSheet("""
+                QTextEdit {
+                    font-size: 9pt;
+                    color: #495057;
+                    background-color: white;
+                    border: 1px solid #ced4da;
+                    border-radius: 4px;
+                    padding: 8px;
+                }
+            """)
+            remarks_text.setMaximumHeight(200)
+            remarks_layout.addWidget(remarks_text)
+        else:
+            no_remarks = QLabel("기타 특이사항 없음")
+            no_remarks.setStyleSheet("font-size: 10pt; color: #6c757d; font-style: italic;")
+            no_remarks.setAlignment(Qt.AlignCenter)
+            remarks_layout.addWidget(no_remarks)
+        
+        box.content_layout.addWidget(remarks_widget)
+        
+        return box
+    
+    def _create_warnings_section(self) -> QWidget:
+        """예외 사항 섹션"""
+        box = self._create_section_box("예외 사항 (수동 확인 필요)")
+        
+        warning_count = QLabel(f"총 {len(self.result.warnings)}건의 예외 사항이 발견되었습니다.")
+        warning_count.setStyleSheet("font-size: 10pt; font-weight: bold; color: #dc3545; margin-bottom: 10px;")
+        box.content_layout.addWidget(warning_count)
+        
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["행번호", "차계", "부품번호", "사유"])
+        
+        display_count = min(30, len(self.result.warnings))
+        table.setRowCount(display_count)
+        
+        for row, (row_num, vehicle, part_no, reason) in enumerate(self.result.warnings[:30]):
+            table.setItem(row, 0, QTableWidgetItem(str(row_num)))
+            table.setItem(row, 1, QTableWidgetItem(vehicle))
+            table.setItem(row, 2, QTableWidgetItem(part_no))
+            table.setItem(row, 3, QTableWidgetItem(reason))
+            
+            table.item(row, 0).setTextAlignment(Qt.AlignCenter)
+        
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setStyleSheet("QHeaderView::section { background-color: #e9ecef; font-weight: bold; }")
+        table.setAlternatingRowColors(True)
+        table.resizeColumnsToContents()
+        table.setMaximumHeight(min(400, 50 + display_count * 35))
+        
+        box.content_layout.addWidget(table)
+        
+        if len(self.result.warnings) > 30:
+            more_lbl = QLabel(f"... 외 {len(self.result.warnings) - 30}건 더")
+            more_lbl.setStyleSheet("font-size: 9pt; color: #6c757d;")
+            box.content_layout.addWidget(more_lbl)
+        
+        note = QLabel("* 예외 항목은 기본값으로 처리되었으며, 수동 확인이 필요합니다.")
+        note.setStyleSheet("font-size: 9pt; color: #6c757d; font-style: italic; margin-top: 5px;")
+        box.content_layout.addWidget(note)
+        
+        return box
+    
+    def _generate_report(self) -> str:
+        """레거시 메서드 - 사용하지 않음"""
+        return ""
 

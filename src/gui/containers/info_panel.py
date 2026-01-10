@@ -180,7 +180,12 @@ class InfoPanel(QWidget):
         for rule in sorted_rules:
             status = rule.get("status", "")
             changes = self._format_rule_changes(rule)
-            text = f"{status} | {changes}"  # 우선순위 표시 제거
+            
+            # ACTIVE 상태는 표시하지 않음
+            if status.upper() == "ACTIVE":
+                text = changes
+            else:
+                text = f"{status} | {changes}"
 
             lbl = QLabel(text)
             lbl.setWordWrap(True)
@@ -239,7 +244,7 @@ class InfoPanel(QWidget):
         if valid(rule.get("engine_form")):
             changes.append(f"엔진: {rule['engine_form']}")
         if rule.get("liability_ratio") is not None:
-            changes.append(f"구상율: {rule['liability_ratio']}%")
+            changes.append(f"구상율: {rule['liability_ratio'] * 100:.0f}%")
         if rule.get("warranty_mileage_override") is not None:
             changes.append(f"주행거리: {rule['warranty_mileage_override']}km")
         if rule.get("warranty_period_override") is not None:

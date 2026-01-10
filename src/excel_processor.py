@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Dict, Optional
+from dateutil.relativedelta import relativedelta
 
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font
@@ -18,6 +19,11 @@ from src.utils import (
     guess_last_data_row,
     AppError,
 )
+from src.database import (
+    get_common_project_liability,
+    get_rules_from_table,
+    _get_global_warranty,
+)
 
 FILL_HIGHLIGHT = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 
@@ -25,6 +31,198 @@ FILL_HIGHLIGHT = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type
 META_SHEET_NAME = "_PREPROCESS_META"
 META_DONE_CELL = "A1"
 META_TS_CELL = "A2"
+
+
+# =========================================================
+# 룰 설명 포맷팅 함수
+# =========================================================
+def format_rule_description(rule: dict) -> str:
+    """룰의 변경점을 포맷팅하여 설명 반환"""
+    changes = []
+    
+    def valid(val, ignore=("ALL", "NONE")):
+        return val and str(val).strip().upper() not in ignore
+    
+    # 수리 지역 (ALL이 아닐 때만)
+    if valid(rule.get("repair_region")):
+        changes.append(f"수리지역:{rule['repair_region']}")
+    
+    # 프로젝트 코드 (ALL이 아닐 때만)
+    if valid(rule.get("project_code")):
+        changes.append(f"프로젝트:{rule['project_code']}")
+    
+    # 제외 프로젝트
+    if rule.get("exclude_project_code"):
+        changes.append(f"제외:{rule['exclude_project_code']}")
+    
+    # 차계 (ALL이 아닐 때만)
+    if valid(rule.get("vehicle_classification")):
+        changes.append(f"차계:{rule['vehicle_classification']}")
+    
+    # 부품명 (ALL이 아닐 때만)
+    if valid(rule.get("part_name")):
+        changes.append(f"부품:{rule['part_name']}")
+    
+    # 부품 번호 (ALL이 아닐 때만)
+    if valid(rule.get("part_no")):
+        changes.append(f"부품번호:{rule['part_no']}")
+    
+    # 엔진 형식 (ALL이 아닐 때만)
+    if valid(rule.get("engine_form")):
+        changes.append(f"엔진:{rule['engine_form']}")
+    
+    # 구상율 (항상 표시)
+    if rule.get("liability_ratio") is not None:
+        changes.append(f"구상율:{rule['liability_ratio'] * 100:.0f}%")
+    
+    # 보증 주행거리 오버라이드
+    if rule.get("warranty_mileage_override") is not None:
+        changes.append(f"주행거리:{rule['warranty_mileage_override']}km")
+    
+    # 보증 기간 오버라이드
+    if rule.get("warranty_period_override") is not None:
+        years = rule["warranty_period_override"] / 365.0
+        changes.append(f"보증기간:{years:.1f}년")
+    
+    # 금액 상한
+    if rule.get("amount_cap_value") is not None and valid(rule.get("amount_cap_type")):
+        changes.append(f"상한:{rule['amount_cap_value']}({rule['amount_cap_type']})")
+    
+    # 적용 시작일
+    if rule.get("valid_from"):
+        changes.append(f"시작:{rule['valid_from']}")
+    
+    # 적용 종료일
+    if rule.get("valid_to"):
+        changes.append(f"종료:{rule['valid_to']}")
+    
+    return " | ".join(changes) if changes else "기본 규칙"
+
+
+# =========================================================
+# 전처리 결과 통계
+# =========================================================
+@dataclass
+class PreprocessResult:
+    """전처리 결과 통계"""
+    # 기본 정보
+    repair_region: str = ""  # DOMESTIC or OVERSEAS
+    company_code: str = ""
+    company_name: str = ""
+    rule_table_name: str = ""
+    process_time: str = ""  # 처리 일시
+    
+    # 처리 결과
+    total_rows: int = 0
+    success_rows: int = 0
+    warning_rows: int = 0
+    error_rows: int = 0
+    
+    # 차계 및 프로젝트 통계 {vehicle: (project_code, count, liability_ratio)}
+    vehicle_stats: Dict[str, Tuple[str, int, Optional[float]]] = field(default_factory=dict)
+    
+    # 프로젝트 코드별 통계 {project_code: (count, liability_ratio)}
+    project_stats: Dict[str, Tuple[int, Optional[float]]] = field(default_factory=dict)
+    
+    # 기본 구상률 적용 통계
+    common_liability_applied: int = 0
+    
+    # 룰별 적용 통계 {rule_id: (description, count)}
+    rule_usage: Dict[int, Tuple[str, int]] = field(default_factory=dict)
+    
+    # 미사용 룰 목록 [(rule_id, description, reason)]
+    unused_rules: List[Tuple[int, str, str]] = field(default_factory=list)
+    
+    # 세부 룰 적용 통계
+    warranty_mileage_rules_applied: int = 0
+    warranty_period_rules_applied: int = 0
+    liability_ratio_rules_applied: int = 0
+    
+    # 보증 기준 (기본값 및 오버라이드)
+    default_mileage_threshold: int = 0
+    default_warranty_years: int = 0
+    mileage_overrides: Dict[int, int] = field(default_factory=dict)  # {mileage_value: count}
+    period_overrides: Dict[int, int] = field(default_factory=dict)  # {years: count}
+    
+    # 워런티 초과 통계
+    mileage_exceeded_rows: int = 0  # 주행거리 초과
+    period_exceeded_rows: int = 0   # 보증기간 초과
+    both_exceeded_rows: int = 0     # 둘 다 초과
+    warranty_highlighted_rows: int = 0  # 총 하이라이트
+    
+    # 경고 항목 (row_num, vehicle, part_no, reason)
+    warnings: List[Tuple[int, str, str, str]] = field(default_factory=list)
+    
+    # 비고/로그 (사용자 확인 필요 항목)
+    remarks: List[str] = field(default_factory=list)
+    
+    def add_vehicle_stat(self, vehicle: str, project_code: str, liability_ratio: Optional[float] = None):
+        """차계별 통계 추가"""
+        if vehicle in self.vehicle_stats:
+            pc, count, ratio = self.vehicle_stats[vehicle]
+            self.vehicle_stats[vehicle] = (pc, count + 1, ratio or liability_ratio)
+        else:
+            self.vehicle_stats[vehicle] = (project_code, 1, liability_ratio)
+    
+    def add_project_stat(self, project_code: str, liability_ratio: Optional[float] = None):
+        """프로젝트 코드별 통계 추가"""
+        if project_code in self.project_stats:
+            count, ratio = self.project_stats[project_code]
+            self.project_stats[project_code] = (count + 1, ratio or liability_ratio)
+        else:
+            self.project_stats[project_code] = (1, liability_ratio)
+    
+    def add_rule_usage(self, rule_id: int, description: str):
+        """룰 사용 통계 추가"""
+        if rule_id in self.rule_usage:
+            desc, count = self.rule_usage[rule_id]
+            self.rule_usage[rule_id] = (desc, count + 1)
+        else:
+            self.rule_usage[rule_id] = (description, 1)
+    
+    def add_mileage_override(self, mileage: int):
+        """주행거리 오버라이드 통계 추가"""
+        self.mileage_overrides[mileage] = self.mileage_overrides.get(mileage, 0) + 1
+    
+    def add_period_override(self, years: int):
+        """보증기간 오버라이드 통계 추가"""
+        self.period_overrides[years] = self.period_overrides.get(years, 0) + 1
+    
+    def add_warning(self, row_num: int, vehicle: str, part_no: str, reason: str):
+        """경고 항목 추가"""
+        self.warnings.append((row_num, vehicle, part_no, reason))
+        self.warning_rows += 1
+    
+    def add_remark(self, message: str):
+        """비고/로그 추가"""
+        self.remarks.append(message)
+
+
+# =========================================================
+# 차계 → 프로젝트 코드 매핑
+# =========================================================
+def get_project_code_from_vehicle(vehicle: str) -> str:
+    """
+    차계에서 프로젝트 코드 추출
+    LFD(G___), HZG(H___), LJL(J___), AR1(K___)
+    """
+    if not vehicle or not isinstance(vehicle, str):
+        return "UNKNOWN"
+    
+    vehicle_upper = vehicle.strip().upper()
+    if not vehicle_upper:
+        return "UNKNOWN"
+    
+    first_char = vehicle_upper[0]
+    
+    project_mapping = {
+        'G': 'LFD',
+        'H': 'HZG',
+        'J': 'LJL',
+        'K': 'AR1',
+    }
+    
+    return project_mapping.get(first_char, "UNKNOWN")
 
 
 # =========================================================
@@ -270,7 +468,88 @@ def set_subtotal_if_empty(ws, target_col: int, first_row: int, last_row: int, su
 
 
 # =========================================================
-# 9) 마일리지/보증기간 필터(데이터 행만)
+# 9) 룰 매칭 로직
+# =========================================================
+def check_rule_match(rule: Dict[str, Any], row_data: Dict[str, Any], current_date: str) -> bool:
+    """
+    룰이 현재 행에 적용 가능한지 확인
+    
+    Args:
+        rule: 룰 데이터 (DB에서 조회한 딕셔너리)
+        row_data: 현재 행 데이터 (vehicle, project_code, part_no, part_name, engine_form)
+        current_date: 현재 날짜 (YYYY-MM-DD)
+    
+    Returns:
+        True if 룰 적용 가능, False otherwise
+    """
+    # 1. 유효 기간 체크
+    valid_from = rule.get("valid_from")
+    valid_to = rule.get("valid_to")
+    
+    if valid_from and current_date < valid_from:
+        return False
+    if valid_to and current_date > valid_to:
+        return False
+    
+    # 2. 프로젝트 코드 체크
+    rule_project_code = rule.get("project_code", "ALL")
+    if rule_project_code != "ALL":
+        if row_data.get("project_code") != rule_project_code:
+            return False
+    
+    # 3. 제외 프로젝트 코드 체크
+    exclude_project_code = rule.get("exclude_project_code")
+    if exclude_project_code:
+        if row_data.get("project_code") == exclude_project_code:
+            return False
+    
+    # 4. 차계 체크
+    rule_vehicle = rule.get("vehicle_classification", "ALL")
+    if rule_vehicle != "ALL":
+        if row_data.get("vehicle") != rule_vehicle:
+            return False
+    
+    # 5. 부품 체크 (부품번호 우선, 부품명 차선)
+    rule_part_no = rule.get("part_no", "ALL")
+    rule_part_name = rule.get("part_name", "ALL")
+    
+    # 룰에 부품번호나 부품명이 설정되어 있는 경우
+    if rule_part_no != "ALL" or rule_part_name != "ALL":
+        row_part_no = str(row_data.get("part_no", "")).strip()
+        row_part_name = str(row_data.get("part_name", "")).strip()
+        
+        # 둘 다 설정된 경우: 부품번호 우선
+        if rule_part_no != "ALL" and rule_part_name != "ALL":
+            # 부품번호 매칭 시도
+            if row_part_no and rule_part_no in row_part_no:
+                pass  # 매칭 성공
+            # 부품번호가 없거나 매칭 실패 시 부품명으로 시도
+            elif row_part_name and rule_part_name in row_part_name:
+                pass  # 매칭 성공
+            else:
+                return False
+        
+        # 부품번호만 설정된 경우
+        elif rule_part_no != "ALL":
+            if not row_part_no or rule_part_no not in row_part_no:
+                return False
+        
+        # 부품명만 설정된 경우
+        elif rule_part_name != "ALL":
+            if not row_part_name or rule_part_name not in row_part_name:
+                return False
+    
+    # 6. 엔진 형태 체크
+    rule_engine_form = rule.get("engine_form", "ALL")
+    if rule_engine_form != "ALL":
+        if row_data.get("engine_form") != rule_engine_form:
+            return False
+    
+    return True
+
+
+# =========================================================
+# 10) 마일리지/보증기간 필터(데이터 행만)
 # =========================================================
 def apply_warranty_filters_ws(
     ws,
@@ -284,7 +563,6 @@ def apply_warranty_filters_ws(
     sale_col = find_col_by_keywords_ws(ws, header_row, ["sale date", "판매일", "sale"], mode="any")
     repair_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자", "repair"], mode="any")
 
-    warranty_days = int(warranty_years * 365)
     changed_rows: set[int] = set()
 
     for r in data_rows:
@@ -296,7 +574,10 @@ def apply_warranty_filters_ws(
         sale_dt = parse_excel_date(ws.cell(row=r, column=sale_col).value)
         repair_dt = parse_excel_date(ws.cell(row=r, column=repair_col).value)
         if sale_dt and repair_dt:
-            if (repair_dt - sale_dt).days >= warranty_days:
+            # 수리일에서 보증기간을 뺀 날짜 계산
+            threshold_date = repair_dt - relativedelta(years=warranty_years)
+            # 판매일이 threshold_date 이전이면 보증기간 초과
+            if sale_dt < threshold_date:
                 set_cell_fill_safe(ws, r, sale_col, FILL_HIGHLIGHT)
                 set_rate(ws, r, rate_col, 0, changed_rows)
 
@@ -307,7 +588,7 @@ def apply_warranty_filters_ws(
 
 
 # =========================================================
-# 10) 메인 처리(워크북 in-place)
+# 11) 메인 처리(워크북 in-place) - 기존 레거시 함수
 # =========================================================
 @dataclass
 class CompanyConfig:
@@ -320,6 +601,7 @@ class CompanyConfig:
 
 
 def process_wb_inplace(wb: Workbook, cfg: CompanyConfig) -> None:
+    """레거시 함수 - 룰 적용 없는 기본 전처리"""
     ws = wb.worksheets[cfg.sheet_index]
 
     vehicle_col = find_col_by_keywords_ws(ws, cfg.header_row, ["vehicle", "차계"], mode="any")
@@ -363,7 +645,264 @@ def process_wb_inplace(wb: Workbook, cfg: CompanyConfig) -> None:
 
 
 # =========================================================
-# 11) 파일 기반 처리(원하면 사용)
+# 12) 새로운 전처리 함수 (룰 기반)
+# =========================================================
+def preprocess_with_rules(
+    wb: Workbook,
+    rule_table_name: str,
+    repair_region: str,
+    company_code: str = "",
+    company_name: str = "",
+    sheet_index: int = 0,
+    header_row: int = 3,
+    data_start_row: int = 4,
+) -> PreprocessResult:
+    """
+    룰 기반 전처리 (새로운 구현)
+    
+    Args:
+        wb: 워크북
+        rule_table_name: 룰 테이블 이름 (예: "rule_company1")
+        repair_region: 수리 지역 ("DOMESTIC" 또는 "OVERSEAS")
+        company_code: 회사 코드
+        company_name: 회사명
+        sheet_index: 시트 인덱스
+        header_row: 헤더 행 번호
+        data_start_row: 데이터 시작 행 번호
+    
+    Returns:
+        PreprocessResult: 전처리 결과 통계
+    """
+    result = PreprocessResult()
+    result.repair_region = repair_region
+    result.company_code = company_code
+    result.company_name = company_name
+    result.rule_table_name = rule_table_name
+    result.process_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    ws = wb.worksheets[sheet_index]
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    # ===== 1단계: 컬럼 찾기 =====
+    try:
+        vehicle_col = find_col_by_keywords_ws(ws, header_row, ["vehicle", "차계"], mode="any")
+        part_no_col = find_col_by_keywords_ws(ws, header_row, ["replaced part", "교환부품", "part no", "교환부품번호"], mode="any")
+        part_name_col = find_col_by_keywords_ws(ws, header_row, ["part name", "부품명"], mode="any")
+        engine_form_col = find_col_by_keywords_ws(ws, header_row, ["engine", "엔진"], mode="any")
+        rate_col = find_rate_col(ws, header_row)
+        occ_col = find_col_by_keywords_ws(ws, header_row, ["total cost", "발생", "발생금액"], mode="any")
+        chb_col = find_chargeback_col(ws, header_row)
+    except Exception as e:
+        raise AppError(f"필수 컬럼을 찾을 수 없습니다: {e}")
+    
+    # ===== 2단계: 마지막 행 찾기 =====
+    last_row_guess = guess_last_data_row(ws, data_start_row, anchor_col=part_no_col, empty_run=30)
+    
+    # ===== 3단계: 병합셀 해제 및 채우기 (차계) =====
+    unmerge_and_fill_column(ws, vehicle_col, data_start_row, last_row_guess)
+    
+    # ===== 4단계: 데이터 행 찾기 =====
+    anchor_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자", "repair"], mode="any")
+    data_rows = iter_data_rows(ws, data_start_row, last_row_guess, anchor_col=anchor_col)
+    
+    if not data_rows:
+        raise AppError("데이터 행을 찾을 수 없습니다.")
+    
+    result.total_rows = len(data_rows)
+    
+    # ===== 5단계: 전역 warranty 값 가져오기 =====
+    global_mileage, global_warranty_years = _get_global_warranty()
+    result.default_mileage_threshold = global_mileage
+    result.default_warranty_years = global_warranty_years
+    
+    # ===== 6단계: 룰 필터링 (repair_region, status='ACTIVE', 날짜) =====
+    all_rules = get_rules_from_table(rule_table_name)
+    active_rules = [
+        r for r in all_rules
+        if r.get("status") == "ACTIVE"
+        and r.get("repair_region") in ("ALL", repair_region)
+    ]
+    
+    # 룰 사용 추적용 딕셔너리 초기화
+    rule_used = {rule.get("rule_id"): False for rule in active_rules}
+    
+    # ===== 7단계: 각 행 처리 =====
+    # 행별 warranty 오버라이드 저장 {row_num: (mileage, years)}
+    row_warranty_overrides: Dict[int, Tuple[Optional[int], Optional[int]]] = {}
+    # 행별 룰 적용 여부 추적
+    row_rule_applied: Dict[int, bool] = {}
+    
+    for row_num in data_rows:
+        try:
+            # 7-1. 차계 → 프로젝트 코드 추출
+            vehicle_value = ws.cell(row=row_num, column=vehicle_col).value
+            part_no_value = ws.cell(row=row_num, column=part_no_col).value
+            project_code = get_project_code_from_vehicle(vehicle_value)
+            
+            vehicle_str = str(vehicle_value) if vehicle_value else ""
+            part_no_str = str(part_no_value) if part_no_value else ""
+            
+            # 차계별 통계 추가
+            if vehicle_str:
+                result.add_vehicle_stat(vehicle_str, project_code)
+            
+            if project_code == "UNKNOWN":
+                result.add_warning(row_num, vehicle_str, part_no_str, "프로젝트 코드 미매칭")
+            
+            # 7-2. common_project_liability 적용 (기본 구상률)
+            liability_ratio = get_common_project_liability(project_code)
+            base_liability_applied = False  # 기본 구상률 적용 여부
+            if liability_ratio is not None:
+                set_rate(ws, row_num, rate_col, liability_ratio, set())
+                result.add_project_stat(project_code, liability_ratio)
+                result.common_liability_applied += 1
+                base_liability_applied = True  # 기본 구상률 적용됨
+            else:
+                result.add_project_stat(project_code, None)
+                if project_code != "UNKNOWN":
+                    result.add_warning(row_num, vehicle_str, part_no_str, "구상률 미설정")
+            
+            # 7-3. 행 데이터 구성
+            row_data = {
+                "vehicle": vehicle_str,
+                "project_code": project_code,
+                "part_no": str(ws.cell(row=row_num, column=part_no_col).value or ""),
+                "part_name": str(ws.cell(row=row_num, column=part_name_col).value or ""),
+                "engine_form": str(ws.cell(row=row_num, column=engine_form_col).value or ""),
+            }
+            
+            # 필수 필드 누락 체크
+            if not row_data["part_no"]:
+                result.add_warning(row_num, vehicle_str, "", "부품번호 누락")
+            
+            # 7-4. 룰 매칭 및 적용 (우선순위 순)
+            rule_applied = False  # 이 행에 룰이 적용되었는지 추적
+            for rule in active_rules:
+                if check_rule_match(rule, row_data, current_date):
+                    rule_id = rule.get("rule_id")
+                    rule_used[rule_id] = True
+                    rule_applied = True  # 룰 적용됨
+                    
+                    # 룰 설명 생성 (format_rule_description 사용)
+                    rule_desc = format_rule_description(rule)
+                    result.add_rule_usage(rule_id, rule_desc)
+                    
+                    # Warranty 오버라이드 룰
+                    warranty_mileage_override = rule.get("warranty_mileage_override")
+                    warranty_period_override = rule.get("warranty_period_override")
+                    
+                    if warranty_mileage_override is not None or warranty_period_override is not None:
+                        # 이미 저장된 오버라이드가 있어도 우선순위에 따라 덮어씀
+                        current_override = row_warranty_overrides.get(row_num, (None, None))
+                        new_mileage = warranty_mileage_override if warranty_mileage_override is not None else current_override[0]
+                        new_years = warranty_period_override if warranty_period_override is not None else current_override[1]
+                        row_warranty_overrides[row_num] = (new_mileage, new_years)
+                        
+                        if warranty_mileage_override is not None:
+                            result.warranty_mileage_rules_applied += 1
+                            result.add_mileage_override(warranty_mileage_override)
+                        if warranty_period_override is not None:
+                            result.warranty_period_rules_applied += 1
+                            result.add_period_override(warranty_period_override)
+                    
+                    # 구상률 오버라이드 룰
+                    rule_liability_ratio = rule.get("liability_ratio")
+                    if rule_liability_ratio is not None:
+                        set_rate(ws, row_num, rate_col, rule_liability_ratio, set())
+                        result.liability_ratio_rules_applied += 1
+            
+            # 룰이 적용되었거나 기본 구상률이 적용된 경우 정상 처리로 카운트
+            row_rule_applied[row_num] = rule_applied
+            if rule_applied or base_liability_applied:
+                result.success_rows += 1
+            else:
+                # 룰도 없고 기본 구상률도 없는 경우 예외 처리
+                if not any(warning[0] == row_num for warning in result.warnings):
+                    result.add_warning(row_num, vehicle_str, part_no_str, "적용 가능한 룰 및 기본 구상률 없음")
+            
+        except Exception as e:
+            result.add_warning(row_num, vehicle_str if 'vehicle_str' in locals() else "?", part_no_str if 'part_no_str' in locals() else "?", f"처리 오류: {e}")
+            result.error_rows += 1
+    
+    # 미사용 룰 기록
+    for rule in active_rules:
+        rule_id = rule.get("rule_id")
+        if not rule_used.get(rule_id, False):
+            # format_rule_description 사용
+            rule_desc = format_rule_description(rule)
+            
+            reason = "조건 미매칭"
+            if repair_region == "DOMESTIC" and rule.get("repair_region") == "OVERSEAS":
+                reason = "지역 불일치 (해외 전용 룰)"
+            elif repair_region == "OVERSEAS" and rule.get("repair_region") == "DOMESTIC":
+                reason = "지역 불일치 (국내 전용 룰)"
+            
+            result.unused_rules.append((rule_id, rule_desc, reason))
+    
+    # ===== 8단계: Warranty 적용 =====
+    mileage_col = pick_mileage_col(ws, header_row)
+    sale_col = find_col_by_keywords_ws(ws, header_row, ["sale date", "판매일", "sale"], mode="any")
+    repair_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자", "repair"], mode="any")
+    
+    for row_num in data_rows:
+        # 오버라이드가 있으면 사용, 없으면 전역 값 사용
+        if row_num in row_warranty_overrides:
+            mileage_override, years_override = row_warranty_overrides[row_num]
+            mileage_threshold = mileage_override if mileage_override is not None else global_mileage
+            warranty_years = years_override if years_override is not None else global_warranty_years
+        else:
+            mileage_threshold = global_mileage
+            warranty_years = global_warranty_years
+        
+        mileage_exceeded = False
+        period_exceeded = False
+        
+        # 주행거리 체크
+        mv = parse_int_like(ws.cell(row=row_num, column=mileage_col).value)
+        if mv is not None and mv >= mileage_threshold:
+            set_cell_fill_safe(ws, row_num, mileage_col, FILL_HIGHLIGHT)
+            set_rate(ws, row_num, rate_col, 0, set())
+            mileage_exceeded = True
+            result.mileage_exceeded_rows += 1
+        
+        # 보증기간 체크
+        sale_dt = parse_excel_date(ws.cell(row=row_num, column=sale_col).value)
+        repair_dt = parse_excel_date(ws.cell(row=row_num, column=repair_col).value)
+        if sale_dt and repair_dt:
+            # 수리일에서 보증기간을 뺀 날짜 계산
+            threshold_date = repair_dt - relativedelta(years=warranty_years)
+            # 판매일이 threshold_date 이전이면 보증기간 초과
+            if sale_dt < threshold_date:
+                set_cell_fill_safe(ws, row_num, sale_col, FILL_HIGHLIGHT)
+                set_rate(ws, row_num, rate_col, 0, set())
+                period_exceeded = True
+                result.period_exceeded_rows += 1
+        
+        if mileage_exceeded and period_exceeded:
+            result.both_exceeded_rows += 1
+        
+        if mileage_exceeded or period_exceeded:
+            set_cell_fill_safe(ws, row_num, rate_col, FILL_HIGHLIGHT)
+            result.warranty_highlighted_rows += 1
+    
+    # ===== 9단계: 후처리 (구상금액, 합계) =====
+    set_chargeback_formula_rows(ws, data_rows, occ_col, rate_col, chb_col)
+    add_sum_rows(ws, data_start_row, last_row_guess, occ_col, chb_col)
+    
+    # 상단 서브토탈
+    subtotal_row = header_row - 1
+    set_subtotal_if_empty(ws, target_col=chb_col, first_row=data_start_row, last_row=last_row_guess, subtotal_row=subtotal_row)
+    
+    # 자동 필터 설정
+    from openpyxl.utils import get_column_letter
+    last_col_letter = get_column_letter(ws.max_column)
+    ws.auto_filter.ref = f"A{header_row}:{last_col_letter}{last_row_guess}"
+    
+    return result
+
+
+# =========================================================
+# 13) 파일 기반 처리(원하면 사용)
 # =========================================================
 def process_file(in_path: str, out_path: str, cfg: CompanyConfig) -> None:
     wb = load_workbook(in_path)
@@ -372,31 +911,50 @@ def process_file(in_path: str, out_path: str, cfg: CompanyConfig) -> None:
 
 
 # =========================================================
-# 12) UI 엔트리
+# 14) UI 엔트리 - 룰 기반 전처리
 # =========================================================
-def preprocess_inplace(wb: Workbook, company: str, keyword: str) -> None:
+def preprocess_inplace(
+    wb: Workbook,
+    company_code: str,
+    company_name: str,
+    rule_table_name: str,
+    repair_region: str
+) -> PreprocessResult:
     """
-    GUI 전처리 버튼 엔트리.
-    company/keyword는 추후 룰 분기용.
+    GUI 전처리 버튼 엔트리 (룰 기반).
+    
+    Args:
+        wb: 워크북
+        company_code: 회사 코드
+        company_name: 회사명
+        rule_table_name: 룰 테이블 이름
+        repair_region: 수리 지역 ("DOMESTIC" 또는 "OVERSEAS")
+    
+    Returns:
+        PreprocessResult: 전처리 결과 통계
     """
     try:
         # ✅ 전처리 1회만 허용
         if _is_already_preprocessed(wb):
             raise AppError("이미 전처리된 파일입니다. (전처리는 1회만 가능합니다)")
-
-        cfg = CompanyConfig(
+        
+        # 룰 기반 전처리 실행
+        result = preprocess_with_rules(
+            wb=wb,
+            rule_table_name=rule_table_name,
+            repair_region=repair_region,
+            company_code=company_code,
+            company_name=company_name,
             sheet_index=0,
             header_row=3,
             data_start_row=4,
-            mileage_threshold=50000,
-            warranty_years=2,
         )
-
-        process_wb_inplace(wb, cfg)
-
+        
         # ✅ 전처리 완료 마킹
         _mark_preprocessed(wb)
-
+        
+        return result
+        
     except AppError:
         raise
     except Exception as e:
