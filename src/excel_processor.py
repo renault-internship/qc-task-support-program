@@ -350,22 +350,33 @@ def pick_mileage_col(ws, header_row: int) -> int:
 # =========================================================
 def unmerge_and_fill_column(ws, target_col: int, data_start_row: int, last_row: int) -> None:
     merged_ranges = list(ws.merged_cells.ranges)
+    unmerged_rows = set()  # 병합셀 해제된 행 추적
 
+    # 병합셀 해제 및 채우기
     for mr in merged_ranges:
         if (mr.min_col <= target_col <= mr.max_col) and (mr.min_row >= data_start_row):
             top_left = ws.cell(mr.min_row, mr.min_col).value
             ws.unmerge_cells(str(mr))
+            # 병합셀 해제된 행 범위 기록
             for r in range(mr.min_row, min(mr.max_row, last_row) + 1):
+                unmerged_rows.add(r)
                 set_cell_value_safe(ws, r, target_col, top_left)
 
-    prev = None
-    for r in range(data_start_row, last_row + 1):
-        cur = ws.cell(row=r, column=target_col).value
-        if _is_blank(cur):
-            if not _is_blank(prev):
-                set_cell_value_safe(ws, r, target_col, prev)
-        else:
-            prev = cur
+    # 병합셀이 해제된 범위 내에서만 빈칸 채우기
+    if unmerged_rows:
+        prev = None
+        for r in range(data_start_row, last_row + 1):
+            cur = ws.cell(row=r, column=target_col).value
+            if r in unmerged_rows:  # 병합셀 해제된 행만 처리
+                if _is_blank(cur):
+                    if not _is_blank(prev):
+                        set_cell_value_safe(ws, r, target_col, prev)
+                else:
+                    prev = cur
+            else:
+                # 병합셀 해제되지 않은 행은 prev 업데이트만 (빈칸 채우지 않음)
+                if not _is_blank(cur):
+                    prev = cur
 
 
 # =========================================================
