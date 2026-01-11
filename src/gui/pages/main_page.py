@@ -659,6 +659,27 @@ class MainPageWidget(QWidget):
             dialog.exec()
         else:
             QMessageBox.information(self, "안내", "전처리 결과가 없습니다.")
+    def _suggest_export_path(self) -> Path:
+        """
+        저장 다이얼로그에 기본으로 채워줄 파일 경로 생성
+        - 국내+해외 둘 다 있으면: 국내파일명 기준으로 _MERGED_수정본
+        - 하나만 있으면: 원본파일명_수정본
+        """
+        suffix = "_수정본"
+
+        if self.file_path_domestic and self.file_path_overseas:
+            base = self.file_path_domestic
+            return base.with_name(f"{base.stem}_MERGED{suffix}.xlsx")
+
+        if self.file_path_domestic:
+            base = self.file_path_domestic
+            return base.with_name(f"{base.stem}{suffix}.xlsx")
+
+        if self.file_path_overseas:
+            base = self.file_path_overseas
+            return base.with_name(f"{base.stem}{suffix}.xlsx")
+
+        return Path.cwd() / f"export{suffix}.xlsx"
 
     # ================= 저장 =================
     def save_as_file(self):
@@ -694,9 +715,15 @@ class MainPageWidget(QWidget):
             QMessageBox.information(self, "안내", "먼저 파일을 업로드하세요.")
             return
 
+        default_path = self._suggest_export_path()
+
         path, _ = QFileDialog.getSaveFileName(
-            self, "최종 엑셀로 저장", "", "Excel Files (*.xlsx)"
+            self,
+            "최종 엑셀로 저장",
+            str(default_path),  # ✅ 여기서 기본 파일명이 미리 채워짐
+            "Excel Files (*.xlsx)"
         )
+
         if not path:
             return
 
