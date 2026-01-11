@@ -9,6 +9,11 @@ SAP 기업정보 저장 및 조회
 
 추가:
 - common_project_liability 테이블 추가 (project_code -> 기본 liability_ratio)
+
+✅ 이번 변경(딱 이것만):
+- rule_{sap_code} 테이블에 note 컬럼 지원
+  1) 새로 생성되는 rule 테이블 스키마에 note 컬럼 포함
+  2) rule insert/update 시 note 컬럼이 있으면 같이 저장 (없어도 에러 안 나게)
 """
 
 from __future__ import annotations
@@ -65,7 +70,7 @@ def init_database() -> None:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS common_project_liability (
             project_code    TEXT PRIMARY KEY,   -- L43, H45, LFD, HZG, ALL 등
-            liability_ratio REAL NOT NULL       -- 0 ~ 100
+            liability_ratio REAL NOT NULL       -- 0~1 스케일 권장(너가 이미 그렇게 쓰는 걸로)
         )
     """)
 
@@ -337,6 +342,19 @@ def get_all_companies_with_code() -> List[Dict[str, str]]:
 # rule 테이블
 # =========================================================
 
+def _table_has_column(cursor: sqlite3.Cursor, table_name: str, column_name: str) -> bool:
+    """
+    테이블에 특정 컬럼이 있는지 확인
+    - note 컬럼 유무에 따라 INSERT/UPDATE 구문을 바꿔서, 이미 만들어진 테이블이 달라도 에러 안 나게 함.
+    """
+    try:
+        cursor.execute(f'PRAGMA table_info("{table_name}")')
+        cols = [r[1] for r in cursor.fetchall()]
+        return column_name in cols
+    except Exception:
+        return False
+
+
 def get_rules_from_table(rule_table_name: str) -> List[Dict[str, Any]]:
     """
     rule_table_name에 해당하는 테이블에서 모든 규칙 조회
@@ -367,6 +385,8 @@ def get_rules_from_table(rule_table_name: str) -> List[Dict[str, Any]]:
 def create_rule_table(rule_table_name: str, cursor=None) -> bool:
     """
     룰 테이블 생성
+
+    ✅ note 컬럼 포함 (신규 생성되는 rule_* 테이블에 note가 빠지지 않게)
     """
     if not rule_table_name or not rule_table_name.startswith("rule_"):
         raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
@@ -405,6 +425,10 @@ def create_rule_table(rule_table_name: str, cursor=None) -> bool:
                 amount_cap_type TEXT NOT NULL DEFAULT 'NONE'
                     CHECK (amount_cap_type IN ('LABOR','OUTSOURCE_LABOR','BOTH_LABOR','NONE')),
                 amount_cap_value INTEGER,
+
+                -- ✅ note 컬럼 추가(신규 테이블 생성 시)
+                note TEXT NOT NULL DEFAULT '',
+
                 valid_from TEXT CHECK (valid_from IS NULL OR date(valid_from) IS NOT NULL),
                 valid_to TEXT CHECK (valid_to IS NULL OR date(valid_to) IS NOT NULL),
                 created_at TEXT DEFAULT (DATETIME('now', 'localtime')),
@@ -529,6 +553,7 @@ def add_rule_to_table(
     valid_from: str = None,
     valid_to: str = None,
     priority: int = None,
+    note: str = "",  # ✅ note 추가
 ) -> int:
     """rule 테이블에 규칙 추가"""
     if not rule_table_name or not rule_table_name.startswith("rule_"):
@@ -583,29 +608,59 @@ def add_rule_to_table(
             from datetime import datetime
             datetime.strptime(valid_to.strip(), "%Y-%m-%d")
 
-        cursor.execute(f"""
-            INSERT INTO "{rule_table_name}" (
+        has_note = _table_has_column(cursor, rule_table_name, "note")
+
+        if has_note:
+            cursor.execute(f"""
+                INSERT INTO "{rule_table_name}" (
+                    priority, status, repair_region, project_code, exclude_project_code,
+                    vehicle_classification, part_no, part_name, engine_form,
+                    warranty_mileage_override, warranty_period_override,
+                    liability_ratio, amount_cap_type, amount_cap_value,
+                    note,
+                    valid_from, valid_to,
+                    created_at, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?,
+                    ?, ?, ?,
+                    ?,
+                    ?, ?,
+                    DATETIME('now', 'localtime'), DATETIME('now', 'localtime')
+                )
+            """, (
+                priority, status, repair_region, project_code, exclude_project_code,
+                vehicle_classification, part_no, part_name, engine_form,
+                warranty_mileage_override, warranty_period_override,
+                liability_ratio, amount_cap_type, amount_cap_value,
+                (note or ""),
+                valid_from, valid_to,
+            ))
+        else:
+            cursor.execute(f"""
+                INSERT INTO "{rule_table_name}" (
+                    priority, status, repair_region, project_code, exclude_project_code,
+                    vehicle_classification, part_no, part_name, engine_form,
+                    warranty_mileage_override, warranty_period_override,
+                    liability_ratio, amount_cap_type, amount_cap_value,
+                    valid_from, valid_to,
+                    created_at, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?,
+                    ?, ?, ?,
+                    ?, ?,
+                    DATETIME('now', 'localtime'), DATETIME('now', 'localtime')
+                )
+            """, (
                 priority, status, repair_region, project_code, exclude_project_code,
                 vehicle_classification, part_no, part_name, engine_form,
                 warranty_mileage_override, warranty_period_override,
                 liability_ratio, amount_cap_type, amount_cap_value,
                 valid_from, valid_to,
-                created_at, updated_at
-            ) VALUES (
-                ?, ?, ?, ?, ?,
-                ?, ?, ?, ?,
-                ?, ?,
-                ?, ?, ?,
-                ?, ?,
-                DATETIME('now', 'localtime'), DATETIME('now', 'localtime')
-            )
-        """, (
-            priority, status, repair_region, project_code, exclude_project_code,
-            vehicle_classification, part_no, part_name, engine_form,
-            warranty_mileage_override, warranty_period_override,
-            liability_ratio, amount_cap_type, amount_cap_value,
-            valid_from, valid_to,
-        ))
+            ))
 
         rule_id = cursor.lastrowid
         conn.commit()
@@ -635,6 +690,7 @@ def update_rule_in_table(
     valid_from: str = None,
     valid_to: str = None,
     engine_form: str = None,
+    note: str = None,  # ✅ note 수정 지원
 ) -> bool:
     """rule 테이블의 규칙 수정"""
     if not rule_table_name or not rule_table_name.startswith("rule_"):
@@ -695,6 +751,11 @@ def update_rule_in_table(
         if engine_form is not None:
             updates.append("engine_form = ?")
             values.append(engine_form)
+
+        # ✅ note는 테이블에 있을 때만 업데이트 (없으면 무시)
+        if note is not None and _table_has_column(cursor, rule_table_name, "note"):
+            updates.append("note = ?")
+            values.append(note)
 
         if not updates:
             return False

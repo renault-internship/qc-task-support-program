@@ -1,7 +1,8 @@
 """
-SAP 테이블에 협력사 데이터 대량 추가 스크립트
-- 중복된 협력사는 제외
-- 룰 테이블은 rule_{sap_code} 로 자동 생성(이미 있으면 그대로)
+SAP 테이블에 협력사 데이터 대량 추가/수정 스크립트
+- 기본: sap_code 기준 중복이면 스킵
+- 예외: 이미 존재하지만 sap_name이 달라진 케이스(예: R603)는 업데이트
+- 룰 테이블은 rule_{sap_code} 로 자동 생성(이미 있으면 그대로)  # (upsert_company 내부 구현에 따름)
 사용법: python insert_sap_data_bulk.py
 """
 from src.database import init_database, get_company_info, upsert_company
@@ -9,7 +10,10 @@ from src.database import init_database, get_company_info, upsert_company
 # 데이터베이스 초기화
 init_database()
 
-# 추가할 데이터
+# 추가/수정할 데이터
+# - sap_code는 PK (중복이면 기본 스킵)
+# - renault_code는 NULL 허용이므로 없으면 ""로 둠
+# - R603: "Cooper Standard" -> "Cooper Standard(R603)" 로 기업명 수정 반영
 suppliers = [
     {"sap_name": "Hanrim Intech", "sap_code": "I806", "renault_code": "247744"},
     {"sap_name": "SMC Co.", "sap_code": "C508", "renault_code": "250034"},
@@ -90,7 +94,10 @@ suppliers = [
     {"sap_name": "Bosch(Kamco)", "sap_code": "E702", "renault_code": "253289"},
     {"sap_name": "Continental Automotive Sys. China (Shanghai)", "sap_code": "Z369", "renault_code": "282803"},
     {"sap_name": "Calsonickansei Korea I", "sap_code": "C902", "renault_code": "248588"},
-    {"sap_name": "Cooper Standard", "sap_code": "R603", "renault_code": "247832"},
+
+    # ✅ R603: 기업명 수정 반영
+    {"sap_name": "Cooper Standard(R603)", "sap_code": "R603", "renault_code": "247832"},
+
     {"sap_name": "SJK(Sejin Elect)", "sap_code": "E902", "renault_code": "253249"},
     {"sap_name": "Kiekert CS", "sap_code": "Z308", "renault_code": "274770"},
     {"sap_name": "LG에너지 솔루션", "sap_code": "E928", "renault_code": "273107"},
@@ -116,33 +123,101 @@ suppliers = [
     {"sap_name": "MANDO CORPORATION (원주)", "sap_code": "C930", "renault_code": "265566"},
     {"sap_name": "Lear Automotive Electronics(Z456) (by Lear Wofe)", "sap_code": "Z456", "renault_code": "417900"},
     {"sap_name": "Korea Fuel-Tech Corporation", "sap_code": "C917", "renault_code": "253253"},
+
+    # =========================
+    # ✅ 여기부터: 네가 추가로 준 신규 목록(표)
+    # =========================
+    {"sap_name": "동신모텍", "sap_code": "B204", "renault_code": ""},
+    {"sap_name": "삼경정기", "sap_code": "B401", "renault_code": ""},
+    {"sap_name": "스타빌루스", "sap_code": "B407", "renault_code": ""},
+    {"sap_name": "KARTEK", "sap_code": "B901", "renault_code": ""},
+    {"sap_name": "KSM", "sap_code": "B902", "renault_code": ""},
+    {"sap_name": "성우하이텍", "sap_code": "B905", "renault_code": ""},
+    {"sap_name": "ASAN", "sap_code": "B913", "renault_code": ""},
+    {"sap_name": "삼성발레오", "sap_code": "B915", "renault_code": ""},
+    {"sap_name": "Cooper Standard(B919)", "sap_code": "B919", "renault_code": "247832"},
+    {"sap_name": "신대림", "sap_code": "B921", "renault_code": ""},
+    {"sap_name": "데프타아시아", "sap_code": "B925", "renault_code": ""},
+    {"sap_name": "그루포안톨린코리아", "sap_code": "B935", "renault_code": ""},
+    {"sap_name": "Cooper Standard(B937)", "sap_code": "B937", "renault_code": "247832"},
+    {"sap_name": "에스엘", "sap_code": "B945", "renault_code": ""},
+    {"sap_name": "화승", "sap_code": "B951", "renault_code": ""},
+    {"sap_name": "TI-Automotive", "sap_code": "C104", "renault_code": "247735"},
+    {"sap_name": "신흥기공", "sap_code": "C406", "renault_code": ""},
+    {"sap_name": "오스템", "sap_code": "C509", "renault_code": ""},
+    {"sap_name": "핸즈코퍼레이션", "sap_code": "C907", "renault_code": ""},
+    {"sap_name": "BEHR(C911)", "sap_code": "C911", "renault_code": "262993"},
+    {"sap_name": "건화이엔지", "sap_code": "C912", "renault_code": ""},
+    {"sap_name": "넥센타이어", "sap_code": "C922", "renault_code": ""},
+    {"sap_name": "TI-Automotive", "sap_code": "C934", "renault_code": ""},
+    {"sap_name": "영화테크", "sap_code": "E505", "renault_code": ""},
+    {"sap_name": "에스텍", "sap_code": "E913", "renault_code": ""},
+    {"sap_name": "LEAR KOREA", "sap_code": "E918", "renault_code": ""},
+    {"sap_name": "LS오토모티브", "sap_code": "E923", "renault_code": ""},
+    {"sap_name": "Atlasbx Co. (한국앤컴퍼니)", "sap_code": "E929", "renault_code": "247834"},
+    {"sap_name": "동아공업", "sap_code": "G212", "renault_code": ""},
+    {"sap_name": "동인실업", "sap_code": "G215", "renault_code": ""},
+    {"sap_name": "평화오일씰", "sap_code": "G601", "renault_code": ""},
+    {"sap_name": "지엔에스쏠리텍", "sap_code": "G917", "renault_code": ""},
+    {"sap_name": "Daelim Autocompany", "sap_code": "G924", "renault_code": ""},
+    {"sap_name": "캣콘코리아", "sap_code": "G933", "renault_code": ""},
+    {"sap_name": "SMR KOR", "sap_code": "I302", "renault_code": ""},
+    {"sap_name": "삼신화학", "sap_code": "I401", "renault_code": ""},
+    {"sap_name": "제일케미텍", "sap_code": "I601", "renault_code": ""},
+    {"sap_name": "파이오락스", "sap_code": "I801", "renault_code": ""},
+    {"sap_name": "BEHR(I906)", "sap_code": "I906", "renault_code": "262993"},
+    {"sap_name": "Joyson(한국타카타)", "sap_code": "I911", "renault_code": ""},
+    {"sap_name": "니프코코리아 울산공장", "sap_code": "I928", "renault_code": ""},
+    {"sap_name": "디티알 진주공장", "sap_code": "R908", "renault_code": ""},
+    {"sap_name": "BOSE", "sap_code": "Z113", "renault_code": ""},
+    {"sap_name": "Hitachi", "sap_code": "Z178", "renault_code": ""},
+    {"sap_name": "LEAR Spain", "sap_code": "Z298", "renault_code": ""},
+    {"sap_name": "LEAR PHILPINE", "sap_code": "Z374", "renault_code": ""},
+    {"sap_name": "CONTI. Changchun", "sap_code": "Z386", "renault_code": ""},
+    {"sap_name": "Aptiv Electrical Centers (CHINA)", "sap_code": "Z442", "renault_code": ""},
+    {"sap_name": "TI-Automotive (Tanjin)", "sap_code": "Z460", "renault_code": ""},
+    {"sap_name": "NIHON (W plast)", "sap_code": "Z475", "renault_code": ""},
+    {"sap_name": "GKN Japan", "sap_code": "Z551", "renault_code": ""},
 ]
 
-print("SAP 테이블에 협력사 데이터 대량 추가 중...")
+print("SAP 테이블에 협력사 데이터 대량 추가/수정 중...")
 print("=" * 70)
 print(f"총 {len(suppliers)}개 협력사 처리 예정")
 print("=" * 70)
 
 added_count = 0
 skipped_count = 0
+updated_count = 0
 error_count = 0
 
 for supplier in suppliers:
-    sap_code = supplier["sap_code"]
-    sap_name = supplier["sap_name"]
-    renault_code = supplier["renault_code"]
+    sap_code = supplier["sap_code"].strip().upper()
+    sap_name = supplier["sap_name"].strip()
+    renault_code = (supplier.get("renault_code") or "").strip()
 
     rule_table_name = f"rule_{sap_code}"
 
     try:
-        # ✅ 중복이면 스킵
         existing = get_company_info(sap_code)
+
+        # ✅ 이미 있으면 기본 스킵
+        # ✅ 단, 기업명 수정 같은 케이스는 업데이트(현재는 R603만)
         if existing:
-            print(f"⊘ 건너뜀: {sap_name} ({sap_code}) - 이미 존재함")
-            skipped_count += 1
+            if sap_code == "R603" and sap_name == "Cooper Standard(R603)":
+                upsert_company(
+                    sap_code="R603",
+                    sap_name="Cooper Standard(R603)",
+                    renault_code=existing.get("renault_code"),
+                    rule_table_name=existing.get("rule_table_name") or "rule_R603",
+                )
+                print(f"✓ 수정: {sap_name} ({sap_code}) - 기업명 업데이트")
+                updated_count += 1
+            else:
+                print(f"⊘ 건너뜀: {sap_name} ({sap_code}) - 이미 존재함")
+                skipped_count += 1
             continue
 
-        # ✅ warranty는 전역 1행으로 따로 관리하니까 여기서 절대 건드리지 않음
+        # ✅ 신규 추가
         upsert_company(
             sap_code=sap_code,
             sap_name=sap_name,
@@ -160,6 +235,7 @@ for supplier in suppliers:
 print("=" * 70)
 print("처리 완료!")
 print(f"  - 추가됨: {added_count}개")
+print(f"  - 수정됨: {updated_count}개")
 print(f"  - 건너뜀: {skipped_count}개 (중복)")
 print(f"  - 오류: {error_count}개")
 print("=" * 70)
