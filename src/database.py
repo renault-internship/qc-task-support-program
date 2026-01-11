@@ -18,12 +18,27 @@ SAP 기업정보 저장 및 조회
 
 from __future__ import annotations
 
+import sys
 import sqlite3
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 # 데이터베이스 파일 경로
-DB_PATH = Path("data/TestDB.sqlite")
+# 실행 파일 또는 스크립트 위치 기준 경로 설정
+if getattr(sys, 'frozen', False):
+    # PyInstaller로 패키징된 경우
+    # --add-data로 추가된 파일은 _internal 폴더에 있음
+    if hasattr(sys, '_MEIPASS'):
+        # _internal 폴더 경로 (--add-data로 추가된 파일 위치)
+        base_path = Path(sys._MEIPASS)
+    else:
+        # 실행 파일과 같은 폴더
+        base_path = Path(sys.executable).parent
+else:
+    # 개발 환경
+    base_path = Path(__file__).parent.parent
+
+DB_PATH = base_path / "data" / "TestDB.sqlite"
 
 # 디폴트 보증값(전역 warranty 행이 없을 때 fallback)
 DEFAULT_WARRANTY_MILEAGE = 60000
