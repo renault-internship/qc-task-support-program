@@ -380,8 +380,11 @@ def set_rate(ws, row: int, rate_col: int, new_rate: float, changed_rows: set[int
     except Exception:
         old_f = None
 
-    if old_f != float(new_rate):
-        cell.value = float(new_rate)
+    # DB의 소수값(0.6)을 퍼센트(60.0)로 변환하여 엑셀에 저장
+    new_rate_percent = float(new_rate) * 100
+
+    if old_f != new_rate_percent:
+        cell.value = new_rate_percent
         changed_rows.add(row)
 
 
