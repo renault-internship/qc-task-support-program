@@ -28,8 +28,10 @@ class MainWindow(QWidget):
         
         self.btn_main_page = QPushButton("메인")
         self.btn_comex_page = QPushButton("comex 관리")
+        self.btn_default_settings_page = QPushButton("기본 설정")
         self.btn_main_page.setCheckable(True)
         self.btn_comex_page.setCheckable(True)
+        self.btn_default_settings_page.setCheckable(True)
         self.btn_main_page.setChecked(True)
         
         # 탭 스타일 적용
@@ -37,6 +39,7 @@ class MainWindow(QWidget):
         
         page_nav.addWidget(self.btn_main_page)
         page_nav.addWidget(self.btn_comex_page)
+        page_nav.addWidget(self.btn_default_settings_page)
         page_nav.addStretch()
         
         # 페이지 스택
@@ -51,6 +54,11 @@ class MainWindow(QWidget):
         self.comex_page = ComExManagementPageWidget()
         self.stacked.addWidget(self.comex_page)
         
+        # 페이지 3: 기본 설정 페이지
+        from src.gui.pages.default_settings_page import DefaultSettingsPageWidget
+        self.default_settings_page = DefaultSettingsPageWidget()
+        self.stacked.addWidget(self.default_settings_page)
+        
         # 레이아웃
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -61,6 +69,7 @@ class MainWindow(QWidget):
         # 페이지 전환 연결
         self.btn_main_page.clicked.connect(lambda: self.switch_page(0))
         self.btn_comex_page.clicked.connect(lambda: self.switch_page(1))
+        self.btn_default_settings_page.clicked.connect(lambda: self.switch_page(2))
     
     def _apply_tab_style(self):
         """탭 스타일 적용 (Qt Material Theme 스타일)"""
@@ -94,10 +103,12 @@ class MainWindow(QWidget):
         """
         self.btn_main_page.setStyleSheet(tab_style)
         self.btn_comex_page.setStyleSheet(tab_style)
+        self.btn_default_settings_page.setStyleSheet(tab_style)
     
     def switch_page(self, index: int):
         """페이지 전환"""
         self.stacked.setCurrentIndex(index)
         self.btn_main_page.setChecked(index == 0)
         self.btn_comex_page.setChecked(index == 1)
+        self.btn_default_settings_page.setChecked(index == 2)
 

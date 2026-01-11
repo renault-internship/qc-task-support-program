@@ -121,6 +121,14 @@ def _get_global_warranty() -> tuple[int, int]:
     return mileage_i, period_i
 
 
+def get_global_warranty() -> tuple[int, int]:
+    """
+    전역 warranty(1행) 읽기 (public 함수)
+    없으면 DEFAULT 반환
+    """
+    return _get_global_warranty()
+
+
 def update_global_warranty(warranty_mileage: int, warranty_period_years: int) -> None:
     """
     전역 warranty(1행) 업데이트
