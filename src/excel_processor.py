@@ -303,7 +303,7 @@ def find_rate_col(ws, header_row: int) -> int:
     구상율(Liability Ratio) 컬럼 정확히 찾기
     """
     try:
-        return find_col_by_keywords_ws(ws, header_row, ["liability", "ratio"], mode="all")
+        return find_col_by_keywords_ws(ws, header_row, ["liability", "구상율"], mode="all")
     except Exception:
         return find_col_by_keywords_ws(ws, header_row, ["구상율"], mode="any")
 
@@ -311,10 +311,10 @@ def find_rate_col(ws, header_row: int) -> int:
 def find_chargeback_col(ws, header_row: int) -> int:
     """
     구상금액(Chargeback Amount) 컬럼 정확히 찾기
-    - '구상'만 넣으면 구상율에도 걸릴 수 있으므로 amount/금액을 반드시 포함
+    - '구상'만 넣으면 구상율에도 걸릴 수 있으므로 금액을 반드시 포함
     """
     try:
-        return find_col_by_keywords_ws(ws, header_row, ["chargeback", "amount"], mode="all")
+        return find_col_by_keywords_ws(ws, header_row, ["chargeback", "구상금액"], mode="all")
     except Exception:
         pass
 
@@ -328,21 +328,10 @@ def find_chargeback_col(ws, header_row: int) -> int:
 
 def pick_mileage_col(ws, header_row: int) -> int:
     """
-    국내 원본에서 주행거리 컬럼이 2개 이상 잡히는 케이스 대비.
-    - 헤더에 '주행'/'mileage' 포함 후보 중 가장 오른쪽 우선
+    주행거리 컬럼 찾기 (KM 단위 컬럼만)
+    - "Mileage Km" 또는 "주행거리 Km" 포함 컬럼만 찾음
     """
-    candidates: List[int] = []
-    for c in range(1, ws.max_column + 1):
-        hv = ws.cell(row=header_row, column=c).value
-        if hv and isinstance(hv, str):
-            s = hv.replace(" ", "")
-            if ("주행" in s) or ("mileage" in hv.lower()):
-                candidates.append(c)
-
-    if candidates:
-        return max(candidates)
-
-    return find_col_by_keywords_ws(ws, header_row, ["mileage", "주행거리"], mode="any")
+    return find_col_by_keywords_ws(ws, header_row, ["mileage km", "주행거리 km"], mode="any")
 
 
 # =========================================================
@@ -575,7 +564,8 @@ def apply_warranty_filters_ws(
 ) -> set[int]:
     mileage_col = pick_mileage_col(ws, header_row)
     sale_col = find_col_by_keywords_ws(ws, header_row, ["sale date", "판매일", "sale"], mode="any")
-    repair_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자", "repair"], mode="any")
+    # 수리일자 - "repair" 제외
+    repair_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자"], mode="any")
 
     changed_rows: set[int] = set()
 
@@ -618,8 +608,10 @@ def process_wb_inplace(wb: Workbook, cfg: CompanyConfig) -> None:
     """레거시 함수 - 룰 적용 없는 기본 전처리"""
     ws = wb.worksheets[cfg.sheet_index]
 
-    vehicle_col = find_col_by_keywords_ws(ws, cfg.header_row, ["vehicle", "차계"], mode="any")
-    occ_col = find_col_by_keywords_ws(ws, cfg.header_row, ["total cost", "발생", "발생금액"], mode="any")
+    # 차계 - vehicle 제외
+    vehicle_col = find_col_by_keywords_ws(ws, cfg.header_row, ["vehicle classification", "차계"], mode="any")
+    # 발생금액 - "발생" 제외
+    occ_col = find_col_by_keywords_ws(ws, cfg.header_row, ["total cost", "발생금액"], mode="any")
     rate_col = find_rate_col(ws, cfg.header_row)
     chb_col = find_chargeback_col(ws, cfg.header_row)
 
@@ -699,12 +691,24 @@ def preprocess_with_rules(
     
     # ===== 1단계: 컬럼 찾기 =====
     try:
-        vehicle_col = find_col_by_keywords_ws(ws, header_row, ["vehicle", "차계"], mode="any")
-        part_no_col = find_col_by_keywords_ws(ws, header_row, ["replaced part", "교환부품", "part no", "교환부품번호"], mode="any")
+        # 차계 - vehicle 제외
+        vehicle_col = find_col_by_keywords_ws(ws, header_row, ["vehicle classification", "차계"], mode="any")
+        
+        # 부품번호 - 해외/국내 분리
+        if repair_region == "OVERSEAS":
+            part_no_col = find_col_by_keywords_ws(ws, header_row, ["PFP", "주원인부품번호"], mode="any")
+        else:  # DOMESTIC
+            part_no_col = find_col_by_keywords_ws(ws, header_row, ["replaced part", "교환부품", "part no", "교환부품번호"], mode="any")
+        
+        # 부품명
         part_name_col = find_col_by_keywords_ws(ws, header_row, ["part name", "부품명"], mode="any")
-        engine_form_col = find_col_by_keywords_ws(ws, header_row, ["engine", "엔진"], mode="any")
+        
+        # 엔진 형식 - engine form 추가
+        engine_form_col = find_col_by_keywords_ws(ws, header_row, ["engine form", "엔진"], mode="any")
+        
         rate_col = find_rate_col(ws, header_row)
-        occ_col = find_col_by_keywords_ws(ws, header_row, ["total cost", "발생", "발생금액"], mode="any")
+        # 발생금액 - "발생" 제외
+        occ_col = find_col_by_keywords_ws(ws, header_row, ["total cost", "발생금액"], mode="any")
         chb_col = find_chargeback_col(ws, header_row)
     except Exception as e:
         raise AppError(f"필수 컬럼을 찾을 수 없습니다: {e}")
@@ -716,7 +720,8 @@ def preprocess_with_rules(
     unmerge_and_fill_column(ws, vehicle_col, data_start_row, last_row_guess)
     
     # ===== 4단계: 데이터 행 찾기 =====
-    anchor_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자", "repair"], mode="any")
+    # 수리일자 - "repair" 제외
+    anchor_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자"], mode="any")
     data_rows = iter_data_rows(ws, data_start_row, last_row_guess, anchor_col=anchor_col)
     
     if not data_rows:
@@ -777,12 +782,16 @@ def preprocess_with_rules(
                     result.add_warning(row_num, vehicle_str, part_no_str, "구상률 미설정")
             
             # 7-3. 행 데이터 구성
+            # 부품명과 엔진 형식은 병합셀일 수 있으므로 좌상단 값 읽기
+            top_row_part, top_col_part = _resolve_merged_anchor(ws, row_num, part_name_col)
+            top_row_engine, top_col_engine = _resolve_merged_anchor(ws, row_num, engine_form_col)
+            
             row_data = {
                 "vehicle": vehicle_str,
                 "project_code": project_code,
                 "part_no": str(ws.cell(row=row_num, column=part_no_col).value or ""),
-                "part_name": str(ws.cell(row=row_num, column=part_name_col).value or ""),
-                "engine_form": str(ws.cell(row=row_num, column=engine_form_col).value or ""),
+                "part_name": str(ws.cell(top_row_part, top_col_part).value or ""),
+                "engine_form": str(ws.cell(top_row_engine, top_col_engine).value or ""),
             }
             
             # 필수 필드 누락 체크
@@ -856,7 +865,8 @@ def preprocess_with_rules(
     # ===== 8단계: Warranty 적용 =====
     mileage_col = pick_mileage_col(ws, header_row)
     sale_col = find_col_by_keywords_ws(ws, header_row, ["sale date", "판매일", "sale"], mode="any")
-    repair_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자", "repair"], mode="any")
+    # 수리일자 - "repair" 제외
+    repair_col = find_col_by_keywords_ws(ws, header_row, ["repair date", "수리일자"], mode="any")
     
     for row_num in data_rows:
         # 오버라이드가 있으면 사용, 없으면 전역 값 사용
