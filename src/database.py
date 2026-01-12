@@ -558,6 +558,131 @@ def update_company_remark(sap_code: str, remark: str) -> bool:
         conn.close()
 
 
+def update_company(
+    old_sap_code: str,
+    new_sap_code: str = None,
+    sap_name: str = None,
+    renault_code: str = None,
+) -> bool:
+    """
+    협력사 정보 업데이트
+    - SAP 코드 변경 시 rule 테이블 이름도 함께 변경
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+
+    try:
+        # 기존 정보 조회
+        cursor.execute("SELECT rule_table_name FROM sap WHERE sap_code = ?", (old_sap_code,))
+        row = cursor.fetchone()
+        if not row:
+            raise ValueError(f"협력사를 찾을 수 없습니다: {old_sap_code}")
+        
+        old_rule_table_name = row[0]
+        
+        # SAP 코드가 변경되는 경우
+        if new_sap_code and new_sap_code != old_sap_code:
+            # 새 rule 테이블 이름 생성
+            new_rule_table_name = f"rule_{new_sap_code}"
+            
+            # rule 테이블이 존재하면 이름 변경
+            if old_rule_table_name:
+                cursor.execute("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name = ?
+                """, (old_rule_table_name,))
+                if cursor.fetchone():
+                    cursor.execute(f'ALTER TABLE "{old_rule_table_name}" RENAME TO "{new_rule_table_name}"')
+            
+            # sap 테이블 업데이트
+            updates = []
+            values = []
+            
+            updates.append("sap_code = ?")
+            values.append(new_sap_code)
+            
+            updates.append("rule_table_name = ?")
+            values.append(new_rule_table_name if old_rule_table_name else None)
+            
+            if sap_name is not None:
+                updates.append("sap_name = ?")
+                values.append(sap_name)
+            
+            if renault_code is not None:
+                updates.append("renault_code = ?")
+                values.append(renault_code)
+            
+            updates.append("updated_at = DATETIME('now', 'localtime')")
+            values.append(old_sap_code)
+            
+            cursor.execute(
+                f"UPDATE sap SET {', '.join(updates)} WHERE sap_code = ?",
+                values
+            )
+        else:
+            # SAP 코드 변경 없이 다른 정보만 업데이트
+            updates = []
+            values = []
+            
+            if sap_name is not None:
+                updates.append("sap_name = ?")
+                values.append(sap_name)
+            
+            if renault_code is not None:
+                updates.append("renault_code = ?")
+                values.append(renault_code)
+            
+            if updates:
+                updates.append("updated_at = DATETIME('now', 'localtime')")
+                values.append(old_sap_code)
+                
+                cursor.execute(
+                    f"UPDATE sap SET {', '.join(updates)} WHERE sap_code = ?",
+                    values
+                )
+        
+        conn.commit()
+        return cursor.rowcount > 0
+    except sqlite3.OperationalError as e:
+        conn.rollback()
+        raise ValueError(f"협력사 업데이트 실패: {str(e)}")
+    finally:
+        conn.close()
+
+
+def delete_company(sap_code: str) -> bool:
+    """
+    협력사 삭제
+    - rule 테이블도 함께 삭제
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+
+    try:
+        # rule 테이블 이름 조회
+        cursor.execute("SELECT rule_table_name FROM sap WHERE sap_code = ?", (sap_code,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        
+        rule_table_name = row[0]
+        
+        # rule 테이블 삭제
+        if rule_table_name:
+            cursor.execute(f'DROP TABLE IF EXISTS "{rule_table_name}"')
+        
+        # sap 테이블에서 삭제
+        cursor.execute("DELETE FROM sap WHERE sap_code = ?", (sap_code,))
+        
+        conn.commit()
+        return cursor.rowcount > 0
+    except sqlite3.OperationalError as e:
+        conn.rollback()
+        raise ValueError(f"협력사 삭제 실패: {str(e)}")
+    finally:
+        conn.close()
+
+
 def add_rule_to_table(
     rule_table_name: str,
     status: str,

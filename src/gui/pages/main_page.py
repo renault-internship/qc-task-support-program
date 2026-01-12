@@ -662,23 +662,24 @@ class MainPageWidget(QWidget):
     def _suggest_export_path(self) -> Path:
         """
         저장 다이얼로그에 기본으로 채워줄 파일 경로 생성
-        - 국내+해외 둘 다 있으면: 국내파일명 기준으로 _MERGED_수정본
-        - 하나만 있으면: 원본파일명_수정본
+        - 현재 선택된 시트에 따라 해당 파일 경로 제안
         """
         suffix = "_수정본"
-
-        if self.file_path_domestic and self.file_path_overseas:
-            base = self.file_path_domestic
-            return base.with_name(f"{base.stem}_MERGED{suffix}.xlsx")
-
-        if self.file_path_domestic:
-            base = self.file_path_domestic
-            return base.with_name(f"{base.stem}{suffix}.xlsx")
-
-        if self.file_path_overseas:
-            base = self.file_path_overseas
-            return base.with_name(f"{base.stem}{suffix}.xlsx")
-
+        
+        # 현재 선택된 시트 확인
+        sheet_combo = self.control_panel.get_sheet_combo()
+        current_sheet = sheet_combo.currentText()
+        
+        if current_sheet.startswith("국내: "):
+            if self.file_path_domestic:
+                base = self.file_path_domestic
+                return base.with_name(f"{base.stem}{suffix}.xlsx")
+        elif current_sheet.startswith("해외: "):
+            if self.file_path_overseas:
+                base = self.file_path_overseas
+                return base.with_name(f"{base.stem}{suffix}.xlsx")
+        
+        # 기본값
         return Path.cwd() / f"export{suffix}.xlsx"
 
     # ================= 저장 =================
@@ -687,32 +688,28 @@ class MainPageWidget(QWidget):
         if self.model:
             self.model.apply_dirty_to_sheet()
 
-        # 저장할 워크북 결정
-        if self.wb_domestic and self.wb_overseas:
-            # 둘 다 있으면 합쳐서 저장
-            from openpyxl import Workbook
-            merged_wb = Workbook()
-            merged_wb.remove(merged_wb.active)  # 기본 시트 제거
-            
-            # 국내 시트들 복사
-            for sheet_name in self.wb_domestic.sheetnames:
-                source_sheet = self.wb_domestic[sheet_name]
-                new_sheet = merged_wb.create_sheet(f"국내_{sheet_name}")
-                self._copy_sheet(source_sheet, new_sheet)
-            
-            # 해외 시트들 복사
-            for sheet_name in self.wb_overseas.sheetnames:
-                source_sheet = self.wb_overseas[sheet_name]
-                new_sheet = merged_wb.create_sheet(f"해외_{sheet_name}")
-                self._copy_sheet(source_sheet, new_sheet)
-            
-            wb_to_save = merged_wb
-        elif self.wb_domestic:
+        # 현재 선택된 시트 확인
+        sheet_combo = self.control_panel.get_sheet_combo()
+        current_sheet = sheet_combo.currentText()
+        
+        if not current_sheet:
+            QMessageBox.information(self, "안내", "먼저 파일을 업로드하세요.")
+            return
+        
+        # 저장할 워크북 결정 (현재 선택된 시트가 속한 워크북만)
+        wb_to_save = None
+        if current_sheet.startswith("국내: "):
+            if not self.wb_domestic:
+                QMessageBox.information(self, "안내", "국내 청구서가 없습니다.")
+                return
             wb_to_save = self.wb_domestic
-        elif self.wb_overseas:
+        elif current_sheet.startswith("해외: "):
+            if not self.wb_overseas:
+                QMessageBox.information(self, "안내", "해외 청구서가 없습니다.")
+                return
             wb_to_save = self.wb_overseas
         else:
-            QMessageBox.information(self, "안내", "먼저 파일을 업로드하세요.")
+            QMessageBox.information(self, "안내", "시트를 선택하세요.")
             return
 
         default_path = self._suggest_export_path()
@@ -720,7 +717,7 @@ class MainPageWidget(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "최종 엑셀로 저장",
-            str(default_path),  # ✅ 여기서 기본 파일명이 미리 채워짐
+            str(default_path),
             "Excel Files (*.xlsx)"
         )
 
@@ -733,39 +730,6 @@ class MainPageWidget(QWidget):
         except AppError as e:
             QMessageBox.critical(self, "오류", str(e))
     
-    def _copy_sheet(self, source_sheet, target_sheet):
-        """시트 내용 복사 (수식 포함)"""
-        for row in source_sheet.iter_rows():
-            for cell in row:
-                target_cell = target_sheet.cell(row=cell.row, column=cell.column)
-                
-                # 수식이 있으면 수식 복사, 없으면 값 복사
-                if cell.data_type == 'f':  # formula
-                    target_cell.value = cell.value  # 수식 문자열
-                else:
-                    target_cell.value = cell.value
-                
-                # 스타일 복사
-                if cell.has_style:
-                    target_cell.font = cell.font
-                    target_cell.border = cell.border
-                    target_cell.fill = cell.fill
-                    target_cell.number_format = cell.number_format
-                    target_cell.protection = cell.protection
-                    target_cell.alignment = cell.alignment
-        
-        # 병합 셀 복사
-        for merged_range in source_sheet.merged_cells.ranges:
-            target_sheet.merge_cells(str(merged_range))
-        
-        # 열 너비 복사
-        for col in source_sheet.column_dimensions:
-            target_sheet.column_dimensions[col].width = source_sheet.column_dimensions[col].width
-        
-        # 행 높이 복사
-        for row in source_sheet.row_dimensions:
-            target_sheet.row_dimensions[row].height = source_sheet.row_dimensions[row].height
-
     # ================= 테이블 헤더 메뉴 =================
     def _on_header_context_menu(self, pos):
         if not self.proxy or not self.model:

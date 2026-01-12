@@ -7,14 +7,14 @@ from PySide6.QtCore import Qt, QSortFilterProxyModel, QRegularExpression
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QDialog, QTableWidget,
-    QTableWidgetItem, QHeaderView
+    QTableWidgetItem, QHeaderView, QMenu
 )
 
 from src.database import (
     get_all_companies, get_all_companies_with_code, get_company_info, 
     get_rules_from_table, add_rule_to_table, update_rule_in_table, 
     delete_rule_from_table, upsert_company, update_company_remark,
-    update_rule_priorities
+    update_rule_priorities, update_company, delete_company
 )
 from src.gui.dialogs import AddRuleDialog
 
@@ -40,7 +40,7 @@ class AddCompanyDialog(QDialog):
         
         self.renault_code_edit = QLineEdit()
         self.renault_code_edit.setPlaceholderText("예: 247736")
-        layout.addRow("르노 코드 *:", self.renault_code_edit)
+        layout.addRow("르노 코드 (선택사항):", self.renault_code_edit)
         
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -60,18 +60,63 @@ class AddCompanyDialog(QDialog):
         sap_name = self.sap_name_edit.text().strip()
         renault_code = self.renault_code_edit.text().strip()
         
-        # 디폴트 값
-        warranty_mileage = 60000
-        warranty_period = 3 * 365  # 3년을 일로 변환
+        # rule_table_name 자동 생성
         rule_table_name = f"rule_{sap_code}"  # rule_협력사코드
         
         return {
             "sap_code": sap_code,
             "sap_name": sap_name,
             "renault_code": renault_code,
-            "warranty_mileage": warranty_mileage,
-            "warranty_period": warranty_period,
             "rule_table_name": rule_table_name,
+        }
+
+
+class EditCompanyDialog(QDialog):
+    """협력사 수정 다이얼로그"""
+    def __init__(self, company_info: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("협력사 수정")
+        self.setFixedSize(400, 200)
+        self.old_sap_code = company_info.get("sap_code", "")
+        
+        from PySide6.QtWidgets import QFormLayout
+        
+        layout = QFormLayout()
+        
+        self.sap_code_edit = QLineEdit()
+        self.sap_code_edit.setText(company_info.get("sap_code", ""))
+        self.sap_code_edit.setPlaceholderText("예: B907")
+        layout.addRow("협력사 코드 *:", self.sap_code_edit)
+        
+        self.sap_name_edit = QLineEdit()
+        self.sap_name_edit.setText(company_info.get("sap_name", ""))
+        self.sap_name_edit.setPlaceholderText("예: AMS")
+        layout.addRow("협력사 이름 *:", self.sap_name_edit)
+        
+        self.renault_code_edit = QLineEdit()
+        self.renault_code_edit.setText(company_info.get("renault_code", ""))
+        self.renault_code_edit.setPlaceholderText("예: 247736")
+        layout.addRow("르노 코드 (선택사항):", self.renault_code_edit)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        ok_btn = QPushButton("확인")
+        cancel_btn = QPushButton("취소")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addRow("", button_layout)
+        
+        self.setLayout(layout)
+    
+    def get_data(self) -> Dict[str, Any]:
+        """입력 데이터 반환"""
+        return {
+            "old_sap_code": self.old_sap_code,
+            "new_sap_code": self.sap_code_edit.text().strip(),
+            "sap_name": self.sap_name_edit.text().strip(),
+            "renault_code": self.renault_code_edit.text().strip(),
         }
 
 
@@ -159,7 +204,7 @@ class RuleManagementWidget(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)  # 다중 선택 가능
         # 기본적으로 드래그 앤 드롭 비활성화 (우선순위 변경 모드에서만 활성화)
         self.table.setDragDropMode(QTableWidget.NoDragDrop)
         rule_layout.addWidget(self.table)
@@ -180,6 +225,20 @@ class RuleManagementWidget(QWidget):
     def set_company(self, company_name: str):
         """협력사 설정 및 규칙 로드"""
         self.current_company = company_name
+        
+        # 빈 문자열인 경우 초기화
+        if not company_name or not company_name.strip():
+            self.title_label.setText("협력사를 선택하세요")
+            self.current_rule_table = None
+            self.current_sap_code = None
+            self.rules = []
+            self.remark_text.clear()
+            self.original_remark = ""
+            self.refresh_table()
+            self.btn_add_rule.setEnabled(False)
+            self.btn_priority_mode.setEnabled(False)
+            return
+        
         company_info = get_company_info(company_name)
         
         if not company_info:
@@ -424,36 +483,95 @@ class RuleManagementWidget(QWidget):
                 QMessageBox.critical(self, "오류", f"규칙 수정 실패: {str(e)}")
     
     def on_delete_rule(self):
-        """규칙 삭제"""
+        """규칙 삭제 (다중 선택 지원)"""
         selected_items = self.table.selectedItems()
         if not selected_items:
             return
         
-        row = selected_items[0].row()
-        if row < 0 or row >= len(self.rules):
+        # 선택된 행들의 rule_id 수집
+        selected_rows = set()
+        for item in selected_items:
+            row = item.row()
+            if 0 <= row < len(self.rules):
+                selected_rows.add(row)
+        
+        if not selected_rows:
             return
         
-        rule = self.rules[row]
-        rule_id = rule.get("rule_id")
+        # 선택된 규칙들의 rule_id와 정보 수집
+        rule_ids_to_delete = []
+        rules_info = []
+        for row in selected_rows:
+            rule = self.rules[row]
+            rule_id = rule.get("rule_id")
+            if rule_id:
+                rule_ids_to_delete.append(rule_id)
+                rules_info.append({
+                    "rule_id": rule_id,
+                    "priority": rule.get("priority"),
+                    "status": rule.get("status")
+                })
         
-        if not rule_id:
-            QMessageBox.warning(self, "오류", "규칙 ID를 찾을 수 없습니다.")
+        if not rule_ids_to_delete:
+            QMessageBox.warning(self, "오류", "삭제할 규칙을 찾을 수 없습니다.")
             return
+        
+        if not self.current_rule_table:
+            QMessageBox.warning(self, "오류", "Rule 테이블이 없습니다.")
+            return
+        
+        # 확인 메시지 (단일/다중 구분)
+        if len(rule_ids_to_delete) == 1:
+            rule_info = rules_info[0]
+            message = f"이 규칙을 삭제하시겠습니까?\n(우선순위: {rule_info['priority']}, 상태: {rule_info['status']})"
+        else:
+            message = f"선택한 {len(rule_ids_to_delete)}개의 규칙을 삭제하시겠습니까?"
         
         reply = QMessageBox.question(
             self, "확인", 
-            f"이 규칙을 삭제하시겠습니까?\n(우선순위: {rule.get('priority')}, 상태: {rule.get('status')})",
+            message,
             QMessageBox.Yes | QMessageBox.No
         )
         
         if reply == QMessageBox.Yes:
             try:
-                success = delete_rule_from_table(self.current_rule_table, rule_id)
-                if success:
-                    QMessageBox.information(self, "완료", "규칙이 삭제되었습니다.")
+                # 모든 선택된 규칙 삭제
+                success_count = 0
+                failed_count = 0
+                
+                for rule_id in rule_ids_to_delete:
+                    success = delete_rule_from_table(self.current_rule_table, rule_id)
+                    if success:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                
+                # 결과 메시지
+                if success_count > 0:
+                    # 삭제 후 남은 룰들의 우선순위 재정렬 (1, 2, 3...)
+                    try:
+                        # 남은 모든 룰 조회 (get_rules_from_table은 이미 priority 순서대로 반환)
+                        remaining_rules = get_rules_from_table(self.current_rule_table)
+                        if remaining_rules:
+                            # priority 순서대로 정렬된 rule_id 리스트 생성
+                            rule_ids_in_order = [r.get("rule_id") for r in remaining_rules if r.get("rule_id")]
+                            
+                            # 우선순위 재정렬 (1, 2, 3...)
+                            if rule_ids_in_order:
+                                update_rule_priorities(self.current_rule_table, rule_ids_in_order)
+                    except Exception as e:
+                        # 우선순위 재정렬 실패해도 삭제는 성공했으므로 경고만 표시
+                        print(f"우선순위 재정렬 실패: {str(e)}")
+                    
+                    if len(rule_ids_to_delete) == 1:
+                        QMessageBox.information(self, "완료", "규칙이 삭제되었습니다.")
+                    else:
+                        QMessageBox.information(self, "완료", f"{success_count}개의 규칙이 삭제되었습니다.")
                     self.set_company(self.current_company)  # 새로고침
-                else:
-                    QMessageBox.warning(self, "오류", "규칙 삭제에 실패했습니다.")
+                
+                if failed_count > 0:
+                    QMessageBox.warning(self, "경고", f"{failed_count}개의 규칙 삭제에 실패했습니다.")
+                    
             except Exception as e:
                 QMessageBox.critical(self, "오류", f"규칙 삭제 실패: {str(e)}")
     
@@ -656,6 +774,8 @@ class ComExManagementPageWidget(QWidget):
         # 협력사 목록
         self.company_list = QListWidget()
         self.company_list.setMaximumWidth(250)
+        self.company_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.company_list.customContextMenuRequested.connect(self.on_company_context_menu)
         left_panel.addWidget(self.company_list, 1)
         
         left_widget = QWidget()
@@ -734,17 +854,12 @@ class ComExManagementPageWidget(QWidget):
             if not data["sap_name"]:
                 QMessageBox.warning(self, "오류", "협력사 이름을 입력해주세요.")
                 return
-            if not data["renault_code"]:
-                QMessageBox.warning(self, "오류", "르노 코드를 입력해주세요.")
-                return
             
             try:
                 upsert_company(
                     sap_code=data["sap_code"],
                     sap_name=data["sap_name"],
                     renault_code=data["renault_code"],
-                    warranty_mileage=data["warranty_mileage"],
-                    warranty_period=data["warranty_period"],
                     rule_table_name=data["rule_table_name"],
                 )
                 QMessageBox.information(self, "완료", "협력사가 추가되었습니다.")
@@ -756,4 +871,113 @@ class ComExManagementPageWidget(QWidget):
         """협력사 선택 시"""
         company_name = item.text()
         self.rule_management.set_company(company_name)
+    
+    def on_company_context_menu(self, pos):
+        """협력사 목록 우클릭 메뉴"""
+        item = self.company_list.itemAt(pos)
+        if not item:
+            return
+        
+        company_name = item.text()
+        company_info = self.company_data.get(company_name, {})
+        sap_code = company_info.get("sap_code")
+        
+        if not sap_code:
+            return
+        
+        # 전체 회사 정보 가져오기
+        full_company_info = get_company_info(sap_code)
+        if not full_company_info:
+            return
+        
+        menu = QMenu(self)
+        act_edit = menu.addAction("수정")
+        act_delete = menu.addAction("삭제")
+        
+        picked = menu.exec(self.company_list.mapToGlobal(pos))
+        
+        if picked == act_edit:
+            self.on_edit_company(full_company_info)
+        elif picked == act_delete:
+            self.on_delete_company(full_company_info)
+    
+    def on_edit_company(self, company_info: Dict[str, Any]):
+        """협력사 수정"""
+        dialog = EditCompanyDialog(company_info, self)
+        if dialog.exec() == QDialog.Accepted:
+            data = dialog.get_data()
+            
+            if not data["new_sap_code"]:
+                QMessageBox.warning(self, "오류", "협력사 코드를 입력해주세요.")
+                return
+            if not data["sap_name"]:
+                QMessageBox.warning(self, "오류", "협력사 이름을 입력해주세요.")
+                return
+            
+            try:
+                success = update_company(
+                    old_sap_code=data["old_sap_code"],
+                    new_sap_code=data["new_sap_code"],
+                    sap_name=data["sap_name"],
+                    renault_code=data["renault_code"],
+                )
+                
+                if success:
+                    QMessageBox.information(self, "완료", "협력사가 수정되었습니다.")
+                    # 현재 선택된 회사가 수정된 경우 규칙 관리도 새로고침
+                    current_item = self.company_list.currentItem()
+                    if current_item and current_item.text() == company_info.get("sap_name"):
+                        # SAP 코드가 변경된 경우 새 이름으로 선택
+                        if data["new_sap_code"] != data["old_sap_code"]:
+                            # 목록 새로고침 후 새 이름으로 선택
+                            self.load_companies()
+                            # 새 이름으로 항목 찾기
+                            for i in range(self.company_list.count()):
+                                item = self.company_list.item(i)
+                                if item.text() == data["sap_name"]:
+                                    self.company_list.setCurrentItem(item)
+                                    self.on_company_selected(item)
+                                    break
+                        else:
+                            # 이름만 변경된 경우
+                            self.load_companies()
+                            for i in range(self.company_list.count()):
+                                item = self.company_list.item(i)
+                                if item.text() == data["sap_name"]:
+                                    self.company_list.setCurrentItem(item)
+                                    self.on_company_selected(item)
+                                    break
+                    else:
+                        self.load_companies()
+                else:
+                    QMessageBox.warning(self, "오류", "협력사 수정에 실패했습니다.")
+            except Exception as e:
+                QMessageBox.critical(self, "오류", f"협력사 수정 실패: {str(e)}")
+    
+    def on_delete_company(self, company_info: Dict[str, Any]):
+        """협력사 삭제"""
+        sap_code = company_info.get("sap_code")
+        sap_name = company_info.get("sap_name")
+        
+        reply = QMessageBox.question(
+            self, "확인",
+            f"'{sap_name}' ({sap_code}) 협력사를 삭제하시겠습니까?\n\n"
+            "주의: 이 작업은 되돌릴 수 없으며, 관련 rule 테이블도 함께 삭제됩니다.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                success = delete_company(sap_code)
+                
+                if success:
+                    QMessageBox.information(self, "완료", "협력사가 삭제되었습니다.")
+                    # 규칙 관리 초기화
+                    self.rule_management.set_company("")
+                    # 목록 새로고침
+                    self.load_companies()
+                else:
+                    QMessageBox.warning(self, "오류", "협력사 삭제에 실패했습니다.")
+            except Exception as e:
+                QMessageBox.critical(self, "오류", f"협력사 삭제 실패: {str(e)}")
 
