@@ -256,5 +256,6 @@ class InfoPanel(QWidget):
             changes.append(f"시작일: {rule['valid_from']}")
         if rule.get("valid_to"):
             changes.append(f"종료일: {rule['valid_to']}")
-
+        if rule.get("note"):
+            changes.append(f"비고: {rule['note']}")
         return " | ".join(changes) if changes else "기본 규칙"

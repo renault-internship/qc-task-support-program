@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 
 # 실행방법: python import_rules_from_csv.py <rules.csv>
-
 DB_PATH = Path("data/TestDB.sqlite")
 
 CSV_COLUMNS = [
@@ -27,6 +26,12 @@ CSV_COLUMNS = [
     "valid_from",
     "valid_to",
 ]
+
+# ✅ 여기만 바꾸면 됨: L38/L43/L47 프로젝트코드 행은 CSV에서 읽을 때부터 스킵
+SKIP_PROJECT_CODES = {"L38", "L43", "L47"}  # 필요 없으면 set() 로 비워두면 됨
+
+# ✅ PK(autoincrement) 초기화까지 하고 싶으면 True
+RESET_AUTOINCREMENT = True
 
 # (repair_region, project_code, exclude_project_code, vehicle_classification,
 #  part_no, part_name, engine_form, mileage_cap, period_cap,
@@ -119,6 +124,7 @@ def normalize_liability_ratio(v: Any) -> Optional[float]:
     except Exception:
         return None
 
+    # 80 -> 0.8 같은 케이스
     if lr > 1.0:
         lr = lr / 100.0
     return lr
@@ -177,7 +183,27 @@ def ensure_unique_index(conn: sqlite3.Connection, table_name: str) -> None:
     )
 
 
+def reset_autoincrement_if_possible(conn: sqlite3.Connection, table_name: str) -> None:
+    """
+    - SQLite에서 AUTOINCREMENT 쓰는 테이블이면 sqlite_sequence에 기록됨
+    - DELETE 후 sqlite_sequence 행 제거하면 다음 insert가 다시 1부터 시작
+    - AUTOINCREMENT가 아니면 sqlite_sequence에 없을 수 있으니 조용히 무시
+    """
+    try:
+        conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (table_name,))
+    except Exception:
+        pass
+
+
 def parse_csv_row_to_full_rule_row(d: Dict[str, str]) -> FullRuleRow:
+    # ✅ (B) 여기서도 깨진 CSV를 더 친절하게 잡기
+    if None in d:
+        raise ValueError(
+            "CSV column mismatch detected (extra columns). "
+            "Likely unquoted comma inside a field. "
+            f"extras={d.get(None)} row={d}"
+        )
+
     rr = normalize_text(d.get("repair_region"), "ALL")
     pc = normalize_text(d.get("project_code"), "ALL")
     epc = normalize_nullable_text(d.get("exclude_project_code"))
@@ -192,13 +218,38 @@ def parse_csv_row_to_full_rule_row(d: Dict[str, str]) -> FullRuleRow:
 
     lr = normalize_liability_ratio(d.get("liability_ratio"))
 
-    # ✅ 핵심: 보증 오버라이드(mcap/pcap)가 있으면 lr 없어도 OK
+    ct = normalize_cap_type(d.get("cap_type"))
+    cv = normalize_nullable_int(d.get("cap_value"))
+
+    # ✅ (C-1) cap_type에 숫자가 들어간 경우 보정 (컬럼이 밀린 경우)
+    if lr is None and ct == "NONE":
+        # cap_type 원본 값 확인
+        cap_type_raw = d.get("cap_type", "").strip()
+        if cap_type_raw:
+            try:
+                tmp_lr = normalize_liability_ratio(cap_type_raw)
+                if tmp_lr is not None:
+                    lr = tmp_lr
+                    ct = "NONE"  # cap_type은 비워둠
+            except Exception:
+                pass
+
+    # ✅ (C-2) 임시 보정: 보증 없고 lr 비었는데 cap_type은 없고 cap_value만 0~1이면 lr로 구제
+    if (mcap is None and pcap is None) and (lr is None):
+        # normalize_cap_type은 비어도 "NONE"을 반환하니까, "NONE"이면 cap_type 없는 취급
+        if (ct == "NONE") and (cv is not None):
+            try:
+                tmp = float(str(cv).strip())
+                if 0 < tmp <= 1:
+                    lr = tmp
+                    cv = None
+            except Exception:
+                pass
+
+    # ✅ 보증 오버라이드(mcap/pcap)가 있으면 lr 없어도 OK
     # lr도 없고 보증도 없으면 에러
     if lr is None and (mcap is None and pcap is None):
         raise ValueError(f"liability_ratio is required when no mileage_cap/period_cap. row={d}")
-
-    ct = normalize_cap_type(d.get("cap_type"))
-    cv = normalize_nullable_int(d.get("cap_value"))
 
     note = normalize_nullable_text(d.get("note"))
     vf = normalize_nullable_date(d.get("valid_from"))
@@ -227,8 +278,42 @@ def load_rules_from_csv(csv_path: Path) -> Dict[str, List[tuple]]:
             raise ValueError(f"CSV header missing columns: {missing}. got={header}")
 
         for line_no, d in enumerate(reader, start=2):
+            # ✅ (A-1) CSV 컬럼 불일치 처리: None 키가 있으면 제거하고 경고
+            if None in d:
+                extras = d.get(None, [])
+                # 빈 문자열만 있는 경우는 무시하고 계속 진행
+                if extras and any(str(e).strip() for e in extras):
+                    # 실제 값이 있는 경우에만 에러
+                    raw_line = ""
+                    try:
+                        with csv_path.open("r", encoding="utf-8-sig", newline="") as f2:
+                            lines = f2.readlines()
+                            if line_no - 1 < len(lines):
+                                raw_line = lines[line_no - 1].strip()
+                    except:
+                        pass
+                    
+                    raise ValueError(
+                        f"CSV column mismatch at line {line_no} (unquoted comma inside a field).\n"
+                        f"Expected {len(header)} columns, but found more.\n"
+                        f"Raw line: {raw_line}\n"
+                        f"Parsed row: {d}\n"
+                        f"Extras: {extras}\n"
+                        f"Please check if fields with commas are properly quoted."
+                    )
+                else:
+                    # 빈 값만 있으면 제거하고 계속 진행
+                    del d[None]
+                    print(f"Warning: Line {line_no} has extra empty columns, ignoring...")
+
             table_name_raw = (d.get("rule_") or "").strip()
             if not table_name_raw:
+                continue
+
+            # ✅ 프로젝트코드 스킵: L38/L43/L47 + "L38 EV" / "L38/..." 같은 변형도 스킵
+            pc_norm = normalize_text(d.get("project_code"), "ALL")
+            pc_tokens = re.split(r"[\s/]+", pc_norm.strip())
+            if any(t in SKIP_PROJECT_CODES for t in pc_tokens if t):
                 continue
 
             table_name = safe_table_name(table_name_raw)
@@ -245,9 +330,8 @@ def load_rules_from_csv(csv_path: Path) -> Dict[str, List[tuple]]:
 
 def bulk_insert_rules(rules_to_insert: Dict[str, List[tuple]]):
     """
-    ✅ 변경점:
-    - 테이블별로 '기존 데이터 전체 삭제' 후 CSV 데이터를 다시 넣는다.
-    - 즉, 중복 스킵(INSERT OR IGNORE) 같은 개념이 아니라 "덮어쓰기"이다.
+    - 테이블별로 '기존 데이터 전체 삭제' 후 CSV 데이터를 다시 넣는다. (덮어쓰기)
+    - RESET_AUTOINCREMENT=True면 가능할 때 PK 시퀀스도 초기화 시도
     """
     if not DB_PATH.exists():
         raise FileNotFoundError(f"DB not found: {DB_PATH.resolve()}")
@@ -333,22 +417,24 @@ def bulk_insert_rules(rules_to_insert: Dict[str, List[tuple]]):
                     })
                     continue
 
-                # 유니크 인덱스는 유지/재생성(있어도 무해)
                 ensure_unique_index(conn, actual_table_name)
 
                 before = conn.execute(
                     f'SELECT COUNT(*) AS cnt FROM "{actual_table_name}"'
                 ).fetchone()["cnt"]
 
-                # ✅ 핵심: 기존 데이터 전부 삭제
+                # ✅ 기존 데이터 전부 삭제
                 conn.execute(f'DELETE FROM "{actual_table_name}"')
+                if RESET_AUTOINCREMENT:
+                    reset_autoincrement_if_possible(conn, actual_table_name)
+
                 deleted_here = before
                 total_deleted += deleted_here
 
-                # ✅ CSV 데이터를 "그대로" 다시 삽입
+                 # ✅ CSV 데이터를 "그대로" 다시 삽입 (중복은 스킵)
                 conn.executemany(
                     f"""
-                    INSERT INTO "{actual_table_name}"
+                    INSERT OR IGNORE INTO "{actual_table_name}"
                     (
                       repair_region,
                       project_code,
@@ -375,7 +461,7 @@ def bulk_insert_rules(rules_to_insert: Dict[str, List[tuple]]):
                     f'SELECT COUNT(*) AS cnt FROM "{actual_table_name}"'
                 ).fetchone()["cnt"]
 
-                inserted_here = after  # 삭제 후 넣었으니 after가 곧 inserted
+                inserted_here = after
                 total_inserted += inserted_here
                 total_tables_ok += 1
 
@@ -401,7 +487,6 @@ def bulk_insert_rules(rules_to_insert: Dict[str, List[tuple]]):
             print(f"[SUMMARY] attempted_rows={total_attempted}, deleted_rows={total_deleted}, inserted_rows={total_inserted}")
             print("============================================================")
 
-            # 테이블별 요약(삽입된 것 우선 정렬)
             per_table_stats_sorted = sorted(
                 per_table_stats,
                 key=lambda x: (-(x["inserted"] or 0), x["table"])
