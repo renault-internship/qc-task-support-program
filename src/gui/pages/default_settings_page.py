@@ -39,12 +39,14 @@ class LiabilityRatioDialog(QDialog):
         layout.addRow("프로젝트 코드 *:", self.project_code_edit)
         
         self.liability_ratio_edit = QDoubleSpinBox()
-        self.liability_ratio_edit.setRange(0.0, 1.0)
-        self.liability_ratio_edit.setSingleStep(0.01)
+        self.liability_ratio_edit.setRange(0.0, 100.0)
+        self.liability_ratio_edit.setSingleStep(0.1)
         self.liability_ratio_edit.setDecimals(2)
+        self.liability_ratio_edit.setSuffix(" %")
         if liability_ratio is not None:
-            self.liability_ratio_edit.setValue(liability_ratio)
-        layout.addRow("구상률 (0.0 ~ 1.0) *:", self.liability_ratio_edit)
+            # 저장된 값(0.0 ~ 1.0)을 퍼센티지로 변환
+            self.liability_ratio_edit.setValue(liability_ratio * 100)
+        layout.addRow("구상률 (%) *:", self.liability_ratio_edit)
         
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -60,9 +62,13 @@ class LiabilityRatioDialog(QDialog):
     
     def get_data(self) -> Dict[str, Any]:
         """입력 데이터 반환"""
+        # 퍼센티지 입력값을 0.0 ~ 1.0 범위로 변환
+        percentage = self.liability_ratio_edit.value()
+        liability_ratio = percentage / 100.0
+        
         return {
             "project_code": self.project_code_edit.text().strip(),
-            "liability_ratio": self.liability_ratio_edit.value()
+            "liability_ratio": liability_ratio
         }
 
 
@@ -210,6 +216,10 @@ class LiabilityRatioSettingsWidget(QWidget):
         self.table.setHorizontalHeaderLabels(["프로젝트 코드", "구상률"])
         self.table.setRowCount(len(self.liabilities))
         
+        # 헤더 설정 (컬럼 설정 후에 다시 적용)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(True)  # 마지막 컬럼이 남은 공간을 채우도록
+        
         for row, item in enumerate(self.liabilities):
             project_code = item.get("project_code", "")
             liability_ratio = item.get("liability_ratio", 0.0)
@@ -226,7 +236,12 @@ class LiabilityRatioSettingsWidget(QWidget):
                 if item_widget:
                     item_widget.setTextAlignment(Qt.AlignCenter)
         
+        # 컬럼 너비 자동 조정
         self.table.resizeColumnsToContents()
+        
+        # 첫 번째 컬럼 최소 너비 보장 (너무 짧아지지 않도록)
+        if self.table.columnWidth(0) < 150:
+            self.table.setColumnWidth(0, 150)
     
     def on_selection_changed(self):
         """선택 변경 시"""
