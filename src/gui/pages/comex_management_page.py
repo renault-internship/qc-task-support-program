@@ -2,19 +2,27 @@
 comex 관리 페이지 - 협력사 목록 및 룰 관리
 """
 from typing import Dict, Any, Optional, List
+from pathlib import Path
+from datetime import datetime
 
 from PySide6.QtCore import Qt, QSortFilterProxyModel, QRegularExpression
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QDialog, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMenu
+    QTableWidgetItem, QHeaderView, QMenu, QFileDialog
 )
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.utils import get_column_letter
 
 from src.database import (
     get_all_companies, get_all_companies_with_code, get_company_info, 
     get_rules_from_table, add_rule_to_table, update_rule_in_table, 
     delete_rule_from_table, upsert_company, update_company_remark,
-    update_rule_priorities, update_company, delete_company
+    update_rule_priorities, update_company, delete_company,
+    get_all_common_project_liabilities, get_global_warranty,
+    get_all_vehicle_project_maps
 )
 from src.gui.dialogs import AddRuleDialog
 
@@ -763,6 +771,8 @@ class ComExManagementPageWidget(QWidget):
         button_layout = QHBoxLayout()
         self.btn_add_company = QPushButton("+ 협력사 추가")
         button_layout.addWidget(self.btn_add_company)
+        self.btn_export_comex = QPushButton("코멕스 내려받기")
+        button_layout.addWidget(self.btn_export_comex)
         left_panel.addLayout(button_layout)
         
         # 검색
@@ -793,6 +803,7 @@ class ComExManagementPageWidget(QWidget):
         
         # 이벤트 연결
         self.btn_add_company.clicked.connect(self.on_add_company)
+        self.btn_export_comex.clicked.connect(self.on_export_comex)
         self.company_list.itemClicked.connect(self.on_company_selected)
         self.search_edit.textChanged.connect(self.on_search_changed)
         
@@ -983,4 +994,277 @@ class ComExManagementPageWidget(QWidget):
                     QMessageBox.warning(self, "오류", "협력사 삭제에 실패했습니다.")
             except Exception as e:
                 QMessageBox.critical(self, "오류", f"협력사 삭제 실패: {str(e)}")
+    
+    def on_export_comex(self):
+        """코멕스 내려받기 - 모든 협력사와 룰을 엑셀 파일로 내보내기"""
+        # 파일 저장 다이얼로그
+        today = datetime.now().strftime("%Y%m%d")
+        default_filename = f"COMEX_{today}.xlsx"
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "코멕스 내보내기",
+            default_filename,
+            "Excel Files (*.xlsx)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # 모든 협력사 정보 가져오기
+            companies = get_all_companies_with_code()
+            
+            if not companies:
+                QMessageBox.warning(self, "알림", "내보낼 협력사가 없습니다.")
+                return
+            
+            # 엑셀 워크북 생성
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "코멕스"
+            
+            # 최상단 정보 추가
+            # 1. 프로젝트별 기본구상률
+            info_start_row = 1
+            ws.append(["프로젝트별 기본구상률", ""])
+            title_row = ws.max_row
+            ws.merge_cells(f"A{title_row}:B{title_row}")
+            title_cell = ws.cell(title_row, 1)
+            title_cell.font = Font(bold=True, size=12)
+            title_cell.fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+            title_cell.alignment = Alignment(horizontal="center", vertical="center")
+            ws.append(["프로젝트 코드", "구상률 (%)"])
+            header_cells = [ws.cell(ws.max_row, 1), ws.cell(ws.max_row, 2)]
+            for cell in header_cells:
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+            project_liabilities = get_all_common_project_liabilities()
+            for pl in project_liabilities:
+                project_code = pl.get("project_code", "")
+                liability_ratio = pl.get("liability_ratio", 0.0)
+                ws.append([project_code, f"{liability_ratio * 100:.2f}"])
+            ws.append([])  # 빈 행
+            
+            # 2. 워런티 정보
+            ws.append(["워런티 정보", ""])
+            title_row = ws.max_row
+            ws.merge_cells(f"A{title_row}:B{title_row}")
+            title_cell = ws.cell(title_row, 1)
+            title_cell.font = Font(bold=True, size=12)
+            title_cell.fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+            title_cell.alignment = Alignment(horizontal="center", vertical="center")
+            warranty_mileage, warranty_period = get_global_warranty()
+            ws.append(["보증 주행거리 (km)", warranty_mileage])
+            ws.append(["보증 기간 (년)", warranty_period])
+            ws.append([])  # 빈 행
+            
+            # 3. 차계-프로젝트 매핑
+            ws.append(["차계-프로젝트 매핑", ""])
+            title_row = ws.max_row
+            ws.merge_cells(f"A{title_row}:B{title_row}")
+            title_cell = ws.cell(title_row, 1)
+            title_cell.font = Font(bold=True, size=12)
+            title_cell.fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+            title_cell.alignment = Alignment(horizontal="center", vertical="center")
+            ws.append(["차계 Prefix", "프로젝트 코드"])
+            header_cells = [ws.cell(ws.max_row, 1), ws.cell(ws.max_row, 2)]
+            for cell in header_cells:
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+            vehicle_maps = get_all_vehicle_project_maps()
+            for vm in vehicle_maps:
+                vehicle_prefix = vm.get("vehicle_prefix", "")
+                project_code = vm.get("project_code", "")
+                ws.append([vehicle_prefix, project_code])
+            ws.append([])  # 빈 행
+            
+            # 헤더 정의 (rule_id, priority, status 제외)
+            headers = [
+                "sap_name", "sap_code", "renault_code",
+                "repair_region", "project_code",
+                "exclude_project_code", "vehicle_classification", "part_name", "part_no",
+                "engine_form", "liability_ratio", "amount_cap_type", "amount_cap_value",
+                "warranty_mileage_override", "warranty_period_override",
+                "valid_from", "valid_to", "note", "remark"
+            ]
+            
+            # 헤더 매핑
+            korean_headers = {
+                "sap_name": "Supplier NAME",
+                "sap_code": "SAP CODE",
+                "renault_code": "RENAULT CODE",
+                "repair_region": "수리 지역",
+                "project_code": "프로젝트 코드",
+                "exclude_project_code": "제외 프로젝트 코드",
+                "vehicle_classification": "차계",
+                "part_name": "부품명",
+                "part_no": "부품번호",
+                "engine_form": "엔진 형식",
+                "liability_ratio": "Supplier's rate (%)",
+                "amount_cap_type": "금액 상한 유형",
+                "amount_cap_value": "상한 금액",
+                "warranty_mileage_override": "보증 주행거리 상한",
+                "warranty_period_override": "보증 기간",
+                "valid_from": "적용 시작일",
+                "valid_to": "적용 종료일",
+                "note": "노트",
+                "remark": "Remark"
+            }
+            
+            # 헤더 행 작성
+            header_row = [korean_headers.get(h, h) for h in headers]
+            ws.append(header_row)
+            header_row_num = ws.max_row
+            
+            # 헤더 스타일 적용
+            header_font = Font(bold=True)
+            header_fill = PatternFill(start_color="FFC000", end_color="FFC000", fill_type="solid")
+            for col_idx, cell in enumerate(ws[header_row_num], 1):
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # 자동필터 적용 (헤더 행에만)
+            last_col_letter = get_column_letter(len(headers))
+            ws.auto_filter.ref = f"A{header_row_num}:{last_col_letter}{header_row_num}"
+            
+            # 각 협력사별로 데이터 작성
+            current_row = header_row_num + 1  # 헤더 다음 행부터 시작
+            merge_ranges = {}  # 병합 범위 저장: {col_name: (start_row, end_row)}
+            
+            for company in companies:
+                sap_code = company.get("sap_code")
+                sap_name = company.get("sap_name")
+                
+                # 협력사 상세 정보 가져오기
+                company_info = get_company_info(sap_code)
+                if not company_info:
+                    continue
+                
+                renault_code = company_info.get("renault_code", "") or ""
+                remark = company_info.get("remark", "") or ""
+                rule_table_name = company_info.get("rule_table_name")
+                
+                # 해당 협력사의 룰 가져오기
+                rules = []
+                if rule_table_name:
+                    rules = get_rules_from_table(rule_table_name)
+                
+                # 룰이 없는 경우에도 1행 작성
+                if not rules:
+                    row_data = [sap_name, sap_code, renault_code]
+                    # 룰 컬럼들은 빈 값 (rule_id, priority, status 제외)
+                    row_data.extend([""] * (len(headers) - 4))  # sap_name, sap_code, renault_code, remark 제외
+                    row_data.append(remark)
+                    ws.append(row_data)
+                    
+                    # 병합 범위 저장 (1행만 있으므로 병합 불필요하지만 일관성을 위해)
+                    for col_name in ["sap_name", "sap_code", "renault_code", "remark"]:
+                        if col_name not in merge_ranges:
+                            merge_ranges[col_name] = []
+                        merge_ranges[col_name].append((current_row, current_row))
+                    
+                    current_row += 1
+                else:
+                    # 룰이 있는 경우
+                    start_row = current_row
+                    
+                    for rule in rules:
+                        row_data = [sap_name, sap_code, renault_code]
+                        
+                        # 룰 데이터 추가 (rule_id, priority, status 제외)
+                        for col_name in headers[3:-1]:  # repair_region부터 note까지 (remark 제외)
+                            value = rule.get(col_name)
+                            if value is None:
+                                row_data.append("")
+                            elif isinstance(value, (int, float)):
+                                # 구상율은 퍼센티지로 변환 (0~1 범위를 0~100으로, % 없이)
+                                if col_name == "liability_ratio" and isinstance(value, float):
+                                    row_data.append(f"{value * 100:.2f}")
+                                else:
+                                    row_data.append(str(value))
+                            elif isinstance(value, bool):
+                                row_data.append("TRUE" if value else "FALSE")
+                            else:
+                                row_data.append(str(value))
+                        
+                        row_data.append(remark)
+                        ws.append(row_data)
+                        current_row += 1
+                    
+                    end_row = current_row - 1
+                    
+                    # 병합 범위 저장
+                    for col_name in ["sap_name", "sap_code", "renault_code", "remark"]:
+                        if col_name not in merge_ranges:
+                            merge_ranges[col_name] = []
+                        merge_ranges[col_name].append((start_row, end_row))
+            
+            # 셀 병합 수행
+            for col_name, ranges in merge_ranges.items():
+                col_idx = headers.index(col_name) + 1  # 1-based index
+                col_letter = get_column_letter(col_idx)  # 안전하게 컬럼 문자 가져오기
+                for start_row, end_row in ranges:
+                    if start_row != end_row:  # 1행 이상인 경우만 병합
+                        # openpyxl merge_cells는 문자열 형식 사용
+                        merge_range = f"{col_letter}{start_row}:{col_letter}{end_row}"
+                        ws.merge_cells(merge_range)
+                        # 병합된 셀 정렬 설정
+                        merged_cell = ws.cell(start_row, col_idx)
+                        merged_cell.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # sap_name, sap_code, renault_code 컬럼의 모든 셀에 중앙정렬 적용
+            center_align_cols = ["sap_name", "sap_code", "renault_code"]
+            for col_name in center_align_cols:
+                col_idx = headers.index(col_name) + 1  # 1-based index
+                # 헤더를 제외한 모든 데이터 행에 중앙정렬 적용
+                for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+                    for cell in row:
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # 구상률(liability_ratio) 컬럼의 모든 셀의 글자색을 빨간색으로 변경
+            if "liability_ratio" in headers:
+                liability_col_idx = headers.index("liability_ratio") + 1  # 1-based index
+                red_font = Font(color="FF0000")
+                # 헤더 포함 모든 셀에 글자색 적용
+                for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=liability_col_idx, max_col=liability_col_idx):
+                    for cell in row:
+                        # 기존 폰트 스타일 유지하면서 색상만 변경
+                        if cell.font:
+                            cell.font = Font(
+                                name=cell.font.name,
+                                size=cell.font.size,
+                                bold=cell.font.bold,
+                                italic=cell.font.italic,
+                                underline=cell.font.underline,
+                                color="FF0000"
+                            )
+                        else:
+                            cell.font = red_font
+            
+            # 컬럼 너비 자동 조정
+            for col_idx, header in enumerate(headers, 1):
+                max_length = len(korean_headers.get(header, header))
+                for row in ws.iter_rows(min_row=header_row_num + 1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+                    for cell in row:
+                        if cell.value:
+                            try:
+                                max_length = max(max_length, len(str(cell.value)))
+                            except:
+                                pass
+                adjusted_width = min(max_length + 2, 50)  # 최대 50자
+                col_letter = get_column_letter(col_idx)  # 안전하게 컬럼 문자 가져오기
+                ws.column_dimensions[col_letter].width = adjusted_width
+            
+            # 파일 저장
+            wb.save(file_path)
+            QMessageBox.information(
+                self,
+                "완료",
+                f"코멕스 내보내기가 완료되었습니다.\n\n파일: {Path(file_path).name}"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"코멕스 내보내기 실패:\n{str(e)}")
 
