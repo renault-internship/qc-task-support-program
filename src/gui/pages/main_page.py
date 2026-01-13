@@ -174,9 +174,16 @@ class MainPageWidget(QWidget):
     def _extract_company_name_or_code(self, text: str) -> str:
         """자동완성 텍스트에서 실제 회사 이름 또는 코드 추출"""
         text = text.strip()
-        # "이름 (코드)" 형식인 경우
+        # "이름 (코드)" 또는 "이름 (추가정보) (코드)" 형식인 경우
         if " (" in text and text.endswith(")"):
-            # 이름 부분만 반환
+            # 마지막 괄호 안의 코드 추출 (SAP 코드로 검색하는 것이 더 정확함)
+            last_open = text.rfind(" (")
+            if last_open != -1:
+                code = text[last_open + 2:-1]  # " (" 이후부터 마지막 ")" 전까지
+                # 코드가 있으면 코드로 검색, 없으면 전체 이름 반환
+                if code:
+                    return code
+            # 마지막 괄호 추출 실패 시 첫 번째 괄호 전까지만 반환
             return text.split(" (")[0]
         # 그 외의 경우는 그대로 반환 (직접 입력한 경우: 이름 또는 코드)
         return text

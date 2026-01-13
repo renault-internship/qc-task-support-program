@@ -720,10 +720,13 @@ def add_rule_to_table(
             vehicle_classification = "ALL"
 
         if liability_ratio is None:
-            if amount_cap_type in ["LABOR", "OUTSOURCE_LABOR", "BOTH_LABOR"] and amount_cap_value is not None:
-                pass
-            else:
-                raise ValueError("구상율은 필수입니다. (LABOR 최댓값 규칙이 아닌 경우)")
+            # 워런티 오버라이드가 있으면 구상율 불필요
+            has_warranty_override = warranty_mileage_override is not None or warranty_period_override is not None
+            # 공임비 상한이 있으면 구상율 불필요
+            has_amount_cap = amount_cap_type in ["LABOR", "OUTSOURCE_LABOR", "BOTH_LABOR"] and amount_cap_value is not None
+            
+            if not (has_warranty_override or has_amount_cap):
+                raise ValueError("구상율은 필수입니다. (워런티 오버라이드 또는 공임비 상한 규칙이 아닌 경우)")
 
         if not amount_cap_type:
             amount_cap_type = "NONE"
