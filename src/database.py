@@ -10,54 +10,228 @@ SAP 기업정보 저장 및 조회
 추가:
 - common_project_liability 테이블 추가 (project_code -> 기본 liability_ratio)
 
-✅ 이번 변경(딱 이것만):
+변경:
 - rule_{sap_code} 테이블에 note 컬럼 지원
   1) 새로 생성되는 rule 테이블 스키마에 note 컬럼 포함
   2) rule insert/update 시 note 컬럼이 있으면 같이 저장 (없어도 에러 안 나게)
+  3) 기존 rule 테이블에도 note 컬럼 없으면 자동 추가(마이그레이션)
+
+변경(차계 프로젝트 맵핑 DB화):
+- vehicle_project_map 테이블 (id, vehicle_prefix, project_code, created_at, updated_at)
+- get_project_code_from_vehicle_db() 제공 (전처리에서 사용)
+- init_database()에서는 절대 seed 데이터 삽입하지 않음
 """
 
 from __future__ import annotations
 
 import sys
 import sqlite3
+import re
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
-# 데이터베이스 파일 경로
-# 실행 파일 또는 스크립트 위치 기준 경로 설정
-if getattr(sys, 'frozen', False):
-    # PyInstaller로 패키징된 경우
-    # --add-data로 추가된 파일은 _internal 폴더에 있음
-    if hasattr(sys, '_MEIPASS'):
-        # _internal 폴더 경로 (--add-data로 추가된 파일 위치)
+
+# =========================================================
+# DB 경로
+# =========================================================
+
+if getattr(sys, "frozen", False):
+    if hasattr(sys, "_MEIPASS"):
         base_path = Path(sys._MEIPASS)
     else:
-        # 실행 파일과 같은 폴더
         base_path = Path(sys.executable).parent
 else:
-    # 개발 환경
     base_path = Path(__file__).parent.parent
 
 DB_PATH = base_path / "data" / "TestDB.sqlite"
 
-# 디폴트 보증값(전역 warranty 행이 없을 때 fallback)
 DEFAULT_WARRANTY_MILEAGE = 60000
 DEFAULT_WARRANTY_PERIOD_YEARS = 3
 
+
+# =========================================================
+# 공통 유틸
+# =========================================================
+
+def _table_has_column(cursor: sqlite3.Cursor, table_name: str, column_name: str) -> bool:
+    try:
+        cursor.execute(f'PRAGMA table_info("{table_name}")')
+        cols = [r[1] for r in cursor.fetchall()]
+        return column_name in cols
+    except Exception:
+        return False
+
+
+def _table_exists(cursor: sqlite3.Cursor, table_name: str) -> bool:
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table_name,),
+    )
+    return cursor.fetchone() is not None
+
+
+def _index_exists(cursor: sqlite3.Cursor, index_name: str) -> bool:
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name=? LIMIT 1",
+        (index_name,),
+    )
+    return cursor.fetchone() is not None
+
+
+# =========================================================
+# rule 테이블 note 컬럼 마이그레이션
+# =========================================================
+
+def ensure_note_column_for_all_rule_tables() -> None:
+    """
+    기존에 생성된 rule_* 테이블에 note 컬럼이 없으면 추가한다.
+    note: TEXT NOT NULL DEFAULT ''
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT name
+            FROM sqlite_master
+            WHERE type='table' AND name LIKE 'rule_%'
+        """)
+        tables = [r[0] for r in cur.fetchall()]
+
+        for t in tables:
+            if not _table_has_column(cur, t, "note"):
+                cur.execute(f'ALTER TABLE "{t}" ADD COLUMN note TEXT NOT NULL DEFAULT ""')
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# =========================================================
+# vehicle_project_map 마이그레이션 (vehicle_key -> vehicle_prefix)
+# =========================================================
+
+def ensure_vehicle_project_map_schema() -> None:
+    """
+    vehicle_project_map 스키마를 요구사항으로 강제 정렬.
+
+    - 기존 테이블이 없으면 아무 것도 안 함 (init_database가 생성)
+    - 기존 테이블이 있으면:
+      * vehicle_key / vehicle_prefix 어떤 형태든 읽어서
+      * 새 스키마(id, vehicle_prefix, project_code, created_at, updated_at)로 복제
+      * old -> __old로 rename, new -> 원래 이름으로 rename, old drop
+    - seed 삽입 없음
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    cur = conn.cursor()
+    try:
+        if not _table_exists(cur, "vehicle_project_map"):
+            return
+
+        # 0) 기존 인덱스 정리(테이블 rename 전에 먼저)
+        cur.execute("DROP INDEX IF EXISTS ux_vpm_vehicle_key")
+        cur.execute("DROP INDEX IF EXISTS idx_vpm_vehicle_key")
+        cur.execute("DROP INDEX IF EXISTS ux_vpm_vehicle_prefix")
+        cur.execute("DROP INDEX IF EXISTS idx_vpm_vehicle_prefix")
+        cur.execute("DROP INDEX IF EXISTS idx_vpm_project_code")
+
+        # 1) 현재 컬럼 목록
+        cur.execute('PRAGMA table_info("vehicle_project_map")')
+        cols = [r[1] for r in cur.fetchall()]
+
+        has_vehicle_key = "vehicle_key" in cols
+        has_vehicle_prefix = "vehicle_prefix" in cols
+
+        # 2) 데이터 읽기: (vehicle_prefix, project_code)
+        if has_vehicle_prefix:
+            cur.execute("SELECT vehicle_prefix, project_code FROM vehicle_project_map")
+        elif has_vehicle_key:
+            cur.execute("SELECT vehicle_key AS vehicle_prefix, project_code FROM vehicle_project_map")
+        else:
+            cur.execute("SELECT NULL AS vehicle_prefix, NULL AS project_code WHERE 0")
+
+        rows = cur.fetchall()
+
+        # 3) 새 테이블 생성(요구사항 스키마)
+        #    - SQLite DEFAULT 함수 문제 피하려고 DEFAULT 안 넣음(필요하면 UPDATE로 채움)
+        cur.execute("""
+            CREATE TABLE vehicle_project_map__new (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_prefix TEXT NOT NULL,
+                project_code   TEXT NOT NULL,
+                created_at     TEXT,
+                updated_at     TEXT
+            )
+        """)
+
+        # 4) 데이터 이관
+        for vp, pc in rows:
+            if vp is None or pc is None:
+                continue
+            vp2 = str(vp).strip().upper()
+            pc2 = str(pc).strip().upper()
+            if not vp2 or not pc2:
+                continue
+            cur.execute("""
+                INSERT INTO vehicle_project_map__new (vehicle_prefix, project_code, created_at, updated_at)
+                VALUES (?, ?, DATETIME('now','localtime'), DATETIME('now','localtime'))
+            """, (vp2, pc2))
+
+        # 5) 새 테이블 내 중복 vehicle_prefix 정리 (같은 prefix 여러개면 마지막 것만 남김)
+        cur.execute("""
+            DELETE FROM vehicle_project_map__new
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM vehicle_project_map__new
+                GROUP BY vehicle_prefix
+            )
+        """)
+
+        # 6) 기존 테이블 rename + 새 테이블을 원래 이름으로
+        cur.execute("ALTER TABLE vehicle_project_map RENAME TO vehicle_project_map__old")
+        cur.execute("ALTER TABLE vehicle_project_map__new RENAME TO vehicle_project_map")
+
+        # 7) 인덱스 재생성
+        cur.execute("""
+            CREATE UNIQUE INDEX ux_vpm_vehicle_prefix
+            ON vehicle_project_map(vehicle_prefix)
+        """)
+        cur.execute("""
+            CREATE INDEX idx_vpm_vehicle_prefix
+            ON vehicle_project_map(vehicle_prefix)
+        """)
+        cur.execute("""
+            CREATE INDEX idx_vpm_project_code
+            ON vehicle_project_map(project_code)
+        """)
+
+        # 8) old 테이블 제거
+        cur.execute("DROP TABLE IF EXISTS vehicle_project_map__old")
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+
+# =========================================================
+# DB 초기화
+# =========================================================
 
 def init_database() -> None:
     """
     데이터베이스 초기화
     - data 폴더 생성
-    - sap / warranty(전역 1행) / common_project_liability 테이블이 없으면 생성
+    - sap / warranty(전역 1행) / common_project_liability / vehicle_project_map 테이블이 없으면 생성
     - warranty는 id=1 한 줄이 항상 존재하도록 보장
+    - ✅ vehicle_project_map seed 삽입 금지
+    - 기존 rule_* 테이블 note 컬럼 마이그레이션
+    - vehicle_project_map vehicle_key -> vehicle_prefix 마이그레이션
     """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
-    # sap: 회사 기본정보만 (보증 컬럼 없음)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sap (
             sap_code        TEXT PRIMARY KEY,
@@ -70,7 +244,6 @@ def init_database() -> None:
         )
     """)
 
-    # warranty: 전역 1행 (id=1)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS warranty (
             id               INTEGER PRIMARY KEY CHECK (id = 1),
@@ -81,29 +254,58 @@ def init_database() -> None:
         )
     """)
 
-    # ✅ common_project_liability: 프로젝트별 기본(공통) 구상률 (1프로젝트 1행)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS common_project_liability (
             project_code    TEXT PRIMARY KEY,   -- L43, H45, LFD, HZG, ALL 등
-            liability_ratio REAL NOT NULL       -- 0~1 스케일 권장(너가 이미 그렇게 쓰는 걸로)
+            liability_ratio REAL NOT NULL       -- 0~1 스케일
         )
     """)
 
-    # 전역 warranty 1행 보장
+    # ✅ 요구사항 스키마로 생성(없을 때만)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS vehicle_project_map (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicle_prefix TEXT NOT NULL,
+            project_code   TEXT NOT NULL,
+            created_at     TEXT DEFAULT (DATETIME('now', 'localtime')),
+            updated_at     TEXT DEFAULT (DATETIME('now', 'localtime'))
+        )
+    """)
+
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_vpm_vehicle_prefix
+        ON vehicle_project_map(vehicle_prefix)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_vpm_vehicle_prefix
+        ON vehicle_project_map(vehicle_prefix)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_vpm_project_code
+        ON vehicle_project_map(project_code)
+    """)
+
+    # warranty 1행 보장
     cursor.execute("""
         INSERT OR IGNORE INTO warranty (id, warranty_mileage, warranty_period)
         VALUES (1, ?, ?)
     """, (DEFAULT_WARRANTY_MILEAGE, DEFAULT_WARRANTY_PERIOD_YEARS))
 
+    # ✅ vehicle_project_map seed 절대 넣지 않음
+
     conn.commit()
     conn.close()
 
+    # 마이그레이션들(테이블이 이미 있던 경우 포함)
+    ensure_note_column_for_all_rule_tables()
+    ensure_vehicle_project_map_schema()
 
-def _get_global_warranty() -> tuple[int, int]:
-    """
-    전역 warranty(1행) 읽기
-    없으면 DEFAULT 반환
-    """
+
+# =========================================================
+# warranty (전역)
+# =========================================================
+
+def _get_global_warranty() -> Tuple[int, int]:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -136,18 +338,11 @@ def _get_global_warranty() -> tuple[int, int]:
     return mileage_i, period_i
 
 
-def get_global_warranty() -> tuple[int, int]:
-    """
-    전역 warranty(1행) 읽기 (public 함수)
-    없으면 DEFAULT 반환
-    """
+def get_global_warranty() -> Tuple[int, int]:
     return _get_global_warranty()
 
 
 def update_global_warranty(warranty_mileage: int, warranty_period_years: int) -> None:
-    """
-    전역 warranty(1행) 업데이트
-    """
     wm = int(warranty_mileage)
     wp = int(warranty_period_years)
 
@@ -168,14 +363,125 @@ def update_global_warranty(warranty_mileage: int, warranty_period_years: int) ->
 
 
 # =========================================================
+# vehicle_project_map (차계/문자열 -> 프로젝트 코드)
+# =========================================================
+
+
+def get_project_code_from_vehicle_db(vehicle: Any) -> Optional[str]:
+    """
+    vehicle_project_map에서 project_code 조회
+
+    조회 규칙:
+    - vehicle 값에서 '첫 영문자 + 뒤 숫자들'을 뽑아 정규화 키 생성
+      예) "G417" / "G-417" / "g 417" -> "G417"
+          "G" -> "G"
+    - DB에는 "G417" 같은 상세키도, "G" 같은 prefix도 있을 수 있음
+    - 가장 구체적인 매칭(길이가 긴 vehicle_prefix) 우선
+    """
+    v = (str(vehicle) if vehicle is not None else "").strip().upper()
+    if not v:
+        return None
+
+    # 0) vehicle 자체가 프로젝트 코드면 그대로 반환(우선)
+    if v in ("LFD", "HZG", "LJL", "AR1", "AR2"):
+        return v
+
+    # 1) 정규화: 첫 알파벳 + 숫자(있으면)만 붙여서 키 생성
+    m = re.search(r"([A-Z])\s*[-_ ]*\s*(\d+)?", v)
+    if not m:
+        return None
+
+    letter = m.group(1)
+    digits = m.group(2) or ""
+    key_full = f"{letter}{digits}"  # "G417" or "G"
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT project_code
+            FROM vehicle_project_map
+            WHERE ? LIKE UPPER(vehicle_prefix) || '%'
+            ORDER BY LENGTH(vehicle_prefix) DESC, id DESC
+            LIMIT 1
+            """,
+            (key_full,),
+        )
+        row = cur.fetchone()
+        if row and row["project_code"]:
+            return str(row["project_code"]).strip().upper()
+        return None
+    finally:
+        conn.close()
+
+
+
+def upsert_vehicle_project_map(vehicle_prefix: str, project_code: str) -> int:
+    """
+    upsert:
+    - vehicle_prefix(유니크) 기준으로 project_code 갱신
+    - 없으면 INSERT
+    """
+    vp = (vehicle_prefix or "").strip().upper()
+    pc = (project_code or "").strip().upper()
+    if not vp:
+        raise ValueError("vehicle_prefix is required")
+    if not pc:
+        raise ValueError("project_code is required")
+
+    conn = sqlite3.connect(str(DB_PATH))
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO vehicle_project_map(vehicle_prefix, project_code, updated_at)
+            VALUES (?, ?, DATETIME('now','localtime'))
+            ON CONFLICT(vehicle_prefix) DO UPDATE SET
+                project_code = excluded.project_code,
+                updated_at   = excluded.updated_at
+        """, (vp, pc))
+        conn.commit()
+
+        cur.execute("SELECT id FROM vehicle_project_map WHERE UPPER(vehicle_prefix)=? LIMIT 1", (vp,))
+        row = cur.fetchone()
+        return int(row[0]) if row else -1
+    finally:
+        conn.close()
+
+
+def get_all_vehicle_project_maps() -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id, vehicle_prefix, project_code, created_at, updated_at
+            FROM vehicle_project_map
+            ORDER BY id ASC
+        """)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows] if rows else []
+    finally:
+        conn.close()
+
+
+def delete_vehicle_project_map(id_: int) -> bool:
+    conn = sqlite3.connect(str(DB_PATH))
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM vehicle_project_map WHERE id = ?", (int(id_),))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# =========================================================
 # common_project_liability (프로젝트 기본/공통 구상률) CRUD
 # =========================================================
 
 def get_common_project_liability(project_code: str) -> Optional[float]:
-    """
-    project_code의 기본(공통) 구상률 조회
-    없으면 None
-    """
     if not project_code:
         return None
 
@@ -203,9 +509,6 @@ def get_common_project_liability(project_code: str) -> Optional[float]:
 
 
 def upsert_common_project_liability(project_code: str, liability_ratio: float) -> None:
-    """
-    project_code의 기본(공통) 구상률 저장/수정
-    """
     if not project_code:
         raise ValueError("project_code is required")
 
@@ -226,9 +529,6 @@ def upsert_common_project_liability(project_code: str, liability_ratio: float) -
 
 
 def get_all_common_project_liabilities() -> List[Dict[str, Any]]:
-    """
-    프로젝트 기본(공통) 구상률 전체 조회 (표/드롭다운 용)
-    """
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -245,9 +545,6 @@ def get_all_common_project_liabilities() -> List[Dict[str, Any]]:
 
 
 def delete_common_project_liability(project_code: str) -> bool:
-    """
-    프로젝트 기본(공통) 구상률 삭제
-    """
     if not project_code:
         return False
 
@@ -266,11 +563,6 @@ def delete_common_project_liability(project_code: str) -> bool:
 
 
 def get_default_liability_ratio_for_project(project_code: str) -> Optional[float]:
-    """
-    rule_* 매칭 실패 시 사용할 프로젝트 기본(공통) 구상률
-    - project_code가 있으면 그걸 먼저 찾고
-    - 없으면 ALL을 fallback
-    """
     if not project_code:
         return get_common_project_liability("ALL")
 
@@ -286,17 +578,6 @@ def get_default_liability_ratio_for_project(project_code: str) -> Optional[float
 # =========================================================
 
 def get_company_info(sap_code_or_name: str) -> Optional[Dict[str, Any]]:
-    """
-    SAP 기업정보 조회 (sap_code 또는 sap_name으로 조회 가능)
-
-    Returns:
-        기업정보 딕셔너리 (기존 코드 호환을 위해 필드명 유지)
-        - mileage_threshold
-        - warranty_years
-        - warranty_mileage
-        - warranty_period
-    """
-    # 전역 warranty 읽기
     warranty_mileage, warranty_years = _get_global_warranty()
 
     conn = sqlite3.connect(str(DB_PATH))
@@ -321,15 +602,14 @@ def get_company_info(sap_code_or_name: str) -> Optional[Dict[str, Any]]:
     return {
         "sap_code": data.get("sap_code"),
         "sap_name": data.get("sap_name"),
-        "company_name": data.get("sap_name"),  # 호환성
+        "company_name": data.get("sap_name"),
         "mileage_threshold": warranty_mileage,
         "warranty_years": warranty_years,
         "warranty_mileage": warranty_mileage,
-        "warranty_period": warranty_years,  # years
+        "warranty_period": warranty_years,
         "rule_table_name": data.get("rule_table_name"),
         "remark": data.get("remark", ""),
         "renault_code": data.get("renault_code", ""),
-        # GUI 호환용(기존 코드에서 기대하면 유지)
         "sheet_index": 0,
         "header_row": 3,
         "data_start_row": 4,
@@ -337,7 +617,6 @@ def get_company_info(sap_code_or_name: str) -> Optional[Dict[str, Any]]:
 
 
 def get_all_companies() -> List[str]:
-    """모든 SAP 기업명 목록 조회 (sap_name 반환)"""
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
@@ -349,7 +628,6 @@ def get_all_companies() -> List[str]:
 
 
 def get_all_companies_with_code() -> List[Dict[str, str]]:
-    """모든 SAP 기업 정보 조회 (sap_code와 sap_name 반환)"""
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -365,24 +643,7 @@ def get_all_companies_with_code() -> List[Dict[str, str]]:
 # rule 테이블
 # =========================================================
 
-def _table_has_column(cursor: sqlite3.Cursor, table_name: str, column_name: str) -> bool:
-    """
-    테이블에 특정 컬럼이 있는지 확인
-    - note 컬럼 유무에 따라 INSERT/UPDATE 구문을 바꿔서, 이미 만들어진 테이블이 달라도 에러 안 나게 함.
-    """
-    try:
-        cursor.execute(f'PRAGMA table_info("{table_name}")')
-        cols = [r[1] for r in cursor.fetchall()]
-        return column_name in cols
-    except Exception:
-        return False
-
-
 def get_rules_from_table(rule_table_name: str) -> List[Dict[str, Any]]:
-    """
-    rule_table_name에 해당하는 테이블에서 모든 규칙 조회
-    - priority 오름차순 정렬
-    """
     if not rule_table_name:
         return []
     if not rule_table_name.startswith("rule_"):
@@ -406,11 +667,6 @@ def get_rules_from_table(rule_table_name: str) -> List[Dict[str, Any]]:
 
 
 def create_rule_table(rule_table_name: str, cursor=None) -> bool:
-    """
-    룰 테이블 생성
-
-    ✅ note 컬럼 포함 (신규 생성되는 rule_* 테이블에 note가 빠지지 않게)
-    """
     if not rule_table_name or not rule_table_name.startswith("rule_"):
         raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
 
@@ -449,7 +705,6 @@ def create_rule_table(rule_table_name: str, cursor=None) -> bool:
                     CHECK (amount_cap_type IN ('LABOR','OUTSOURCE_LABOR','BOTH_LABOR','NONE')),
                 amount_cap_value INTEGER,
 
-                -- ✅ note 컬럼 추가(신규 테이블 생성 시)
                 note TEXT NOT NULL DEFAULT '',
 
                 valid_from TEXT CHECK (valid_from IS NULL OR date(valid_from) IS NOT NULL),
@@ -475,12 +730,6 @@ def upsert_company(
     rule_table_name: str = None,
     renault_code: str = None,
 ) -> None:
-    """
-    SAP 기업정보 저장/업데이트 (보증 제외)
-
-    - sap: sap_code, sap_name, rule_table_name, remark, renault_code 등 "기본 정보"
-    - warranty는 전역 1행이라 여기서 건드리지 않음
-    """
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
@@ -510,7 +759,6 @@ def upsert_company(
                     values,
                 )
 
-            # 룰 테이블 생성(원래 로직 유지)
             if rule_table_name:
                 try:
                     create_rule_table(rule_table_name, cursor)
@@ -539,7 +787,6 @@ def upsert_company(
 
 
 def update_company_remark(sap_code: str, remark: str) -> bool:
-    """SAP 기업의 remark 업데이트"""
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
@@ -564,83 +811,73 @@ def update_company(
     sap_name: str = None,
     renault_code: str = None,
 ) -> bool:
-    """
-    협력사 정보 업데이트
-    - SAP 코드 변경 시 rule 테이블 이름도 함께 변경
-    """
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
     try:
-        # 기존 정보 조회
         cursor.execute("SELECT rule_table_name FROM sap WHERE sap_code = ?", (old_sap_code,))
         row = cursor.fetchone()
         if not row:
             raise ValueError(f"협력사를 찾을 수 없습니다: {old_sap_code}")
-        
+
         old_rule_table_name = row[0]
-        
-        # SAP 코드가 변경되는 경우
+
         if new_sap_code and new_sap_code != old_sap_code:
-            # 새 rule 테이블 이름 생성
             new_rule_table_name = f"rule_{new_sap_code}"
-            
-            # rule 테이블이 존재하면 이름 변경
+
             if old_rule_table_name:
                 cursor.execute("""
-                    SELECT name FROM sqlite_master 
+                    SELECT name FROM sqlite_master
                     WHERE type='table' AND name = ?
                 """, (old_rule_table_name,))
                 if cursor.fetchone():
                     cursor.execute(f'ALTER TABLE "{old_rule_table_name}" RENAME TO "{new_rule_table_name}"')
-            
-            # sap 테이블 업데이트
+
             updates = []
             values = []
-            
+
             updates.append("sap_code = ?")
             values.append(new_sap_code)
-            
+
             updates.append("rule_table_name = ?")
             values.append(new_rule_table_name if old_rule_table_name else None)
-            
+
             if sap_name is not None:
                 updates.append("sap_name = ?")
                 values.append(sap_name)
-            
+
             if renault_code is not None:
                 updates.append("renault_code = ?")
                 values.append(renault_code)
-            
+
             updates.append("updated_at = DATETIME('now', 'localtime')")
             values.append(old_sap_code)
-            
+
             cursor.execute(
                 f"UPDATE sap SET {', '.join(updates)} WHERE sap_code = ?",
                 values
             )
         else:
-            # SAP 코드 변경 없이 다른 정보만 업데이트
             updates = []
             values = []
-            
+
             if sap_name is not None:
                 updates.append("sap_name = ?")
                 values.append(sap_name)
-            
+
             if renault_code is not None:
                 updates.append("renault_code = ?")
                 values.append(renault_code)
-            
+
             if updates:
                 updates.append("updated_at = DATETIME('now', 'localtime')")
                 values.append(old_sap_code)
-                
+
                 cursor.execute(
                     f"UPDATE sap SET {', '.join(updates)} WHERE sap_code = ?",
                     values
                 )
-        
+
         conn.commit()
         return cursor.rowcount > 0
     except sqlite3.OperationalError as e:
@@ -651,29 +888,22 @@ def update_company(
 
 
 def delete_company(sap_code: str) -> bool:
-    """
-    협력사 삭제
-    - rule 테이블도 함께 삭제
-    """
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
     try:
-        # rule 테이블 이름 조회
         cursor.execute("SELECT rule_table_name FROM sap WHERE sap_code = ?", (sap_code,))
         row = cursor.fetchone()
         if not row:
             return False
-        
+
         rule_table_name = row[0]
-        
-        # rule 테이블 삭제
+
         if rule_table_name:
             cursor.execute(f'DROP TABLE IF EXISTS "{rule_table_name}"')
-        
-        # sap 테이블에서 삭제
+
         cursor.execute("DELETE FROM sap WHERE sap_code = ?", (sap_code,))
-        
+
         conn.commit()
         return cursor.rowcount > 0
     except sqlite3.OperationalError as e:
@@ -701,9 +931,8 @@ def add_rule_to_table(
     valid_from: str = None,
     valid_to: str = None,
     priority: int = None,
-    note: str = "",  # ✅ note 추가
+    note: str = "",
 ) -> int:
-    """rule 테이블에 규칙 추가"""
     if not rule_table_name or not rule_table_name.startswith("rule_"):
         raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
 
@@ -720,11 +949,8 @@ def add_rule_to_table(
             vehicle_classification = "ALL"
 
         if liability_ratio is None:
-            # 워런티 오버라이드가 있으면 구상율 불필요
             has_warranty_override = warranty_mileage_override is not None or warranty_period_override is not None
-            # 공임비 상한이 있으면 구상율 불필요
             has_amount_cap = amount_cap_type in ["LABOR", "OUTSOURCE_LABOR", "BOTH_LABOR"] and amount_cap_value is not None
-            
             if not (has_warranty_override or has_amount_cap):
                 raise ValueError("구상율은 필수입니다. (워런티 오버라이드 또는 공임비 상한 규칙이 아닌 경우)")
 
@@ -841,9 +1067,8 @@ def update_rule_in_table(
     valid_from: str = None,
     valid_to: str = None,
     engine_form: str = None,
-    note: str = None,  # ✅ note 수정 지원
+    note: str = None,
 ) -> bool:
-    """rule 테이블의 규칙 수정"""
     if not rule_table_name or not rule_table_name.startswith("rule_"):
         raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
 
@@ -903,7 +1128,6 @@ def update_rule_in_table(
             updates.append("engine_form = ?")
             values.append(engine_form)
 
-        # ✅ note는 테이블에 있을 때만 업데이트 (없으면 무시)
         if note is not None and _table_has_column(cursor, rule_table_name, "note"):
             updates.append("note = ?")
             values.append(note)
@@ -929,7 +1153,6 @@ def update_rule_in_table(
 
 
 def update_rule_priorities(rule_table_name: str, rule_ids_in_order: List[int]) -> bool:
-    """드래그 앤 드롭으로 변경된 순서에 따라 priority 재할당"""
     if not rule_table_name or not rule_table_name.startswith("rule_"):
         raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
 
@@ -941,11 +1164,11 @@ def update_rule_priorities(rule_table_name: str, rule_ids_in_order: List[int]) -
 
     try:
         for new_priority, rule_id in enumerate(rule_ids_in_order, start=1):
-            cursor.execute(f'''
+            cursor.execute(f"""
                 UPDATE "{rule_table_name}"
                 SET priority = ?, updated_at = DATETIME('now', 'localtime')
                 WHERE rule_id = ?
-            ''', (new_priority, rule_id))
+            """, (new_priority, rule_id))
 
         conn.commit()
         return True
@@ -957,7 +1180,6 @@ def update_rule_priorities(rule_table_name: str, rule_ids_in_order: List[int]) -
 
 
 def delete_rule_from_table(rule_table_name: str, rule_id: int) -> bool:
-    """rule 테이블에서 규칙 삭제"""
     if not rule_table_name or not rule_table_name.startswith("rule_"):
         raise ValueError(f"유효하지 않은 rule 테이블명: {rule_table_name}")
 

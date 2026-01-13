@@ -23,6 +23,7 @@ from src.database import (
     get_common_project_liability,
     get_rules_from_table,
     _get_global_warranty,
+    get_project_code_from_vehicle_db,  # ✅ 추가
 )
 
 FILL_HIGHLIGHT = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
@@ -203,26 +204,18 @@ class PreprocessResult:
 # =========================================================
 def get_project_code_from_vehicle(vehicle: str) -> str:
     """
-    차계에서 프로젝트 코드 추출
-    LFD(G___), HZG(H___), LJL(J___), AR1(K___)
+    차계 → 프로젝트 코드 (DB vehicle_project_map 기반)
+    - 완전 매칭(예: G417) 우선
+    - 없으면 prefix 매칭(예: G) fallback
+    - 그래도 없으면 UNKNOWN
     """
-    if not vehicle or not isinstance(vehicle, str):
-        return "UNKNOWN"
-    
-    vehicle_upper = vehicle.strip().upper()
-    if not vehicle_upper:
-        return "UNKNOWN"
-    
-    first_char = vehicle_upper[0]
-    
-    project_mapping = {
-        'G': 'LFD',
-        'H': 'HZG',
-        'J': 'LJL',
-        'K': 'AR1',
-    }
-    
-    return project_mapping.get(first_char, "UNKNOWN")
+    try:
+        code = get_project_code_from_vehicle_db(vehicle)
+    except Exception:
+        code = None
+
+    code = (code or "").strip().upper()
+    return code if code else "UNKNOWN"
 
 
 # =========================================================
