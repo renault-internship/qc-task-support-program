@@ -137,6 +137,8 @@ class PreprocessResult:
     warranty_mileage_rules_applied: int = 0
     warranty_period_rules_applied: int = 0
     liability_ratio_rules_applied: int = 0
+    amount_cap_rules_applied: int = 0  # 공임비 상한 룰 적용 횟수
+    amount_cap_exceeded_rows: int = 0  # 공임비 상한 초과 행 수
     
     # 보증 기준 (기본값 및 오버라이드)
     default_mileage_threshold: int = 0
@@ -376,6 +378,46 @@ def pick_mileage_col(ws, header_row: int) -> int:
     return find_col_by_keywords_ws(ws, header_row, ["mileage km", "주행거리 km"], mode="any")
 
 
+def find_130_percent_col(ws, header_row: int) -> Optional[int]:
+    """
+    130% 컬럼 찾기 (부품비의 1.3배)
+    """
+    try:
+        return find_col_by_keywords_ws(ws, header_row, ["130%", "1.3"], mode="any")
+    except Exception:
+        return None
+
+
+def find_labor_cost_col(ws, header_row: int) -> Optional[int]:
+    """
+    Labor Cost (공임대) 컬럼 찾기
+    """
+    try:
+        return find_col_by_keywords_ws(ws, header_row, ["labor cost", "공임대"], mode="any")
+    except Exception:
+        return None
+
+
+def find_outsource_labor_cost_col(ws, header_row: int) -> Optional[int]:
+    """
+    Labor Cost_Outsourcing (외주공임) 컬럼 찾기
+    """
+    try:
+        return find_col_by_keywords_ws(ws, header_row, ["labor cost_outsourcing", "외주공임"], mode="any")
+    except Exception:
+        return None
+
+
+def find_total_cost_col(ws, header_row: int) -> Optional[int]:
+    """
+    Total Cost (발생금액) 컬럼 찾기
+    """
+    try:
+        return find_col_by_keywords_ws(ws, header_row, ["total cost", "발생금액"], mode="any")
+    except Exception:
+        return None
+
+
 # =========================================================
 # 4) 차계 병합 해제 + 채우기 (데이터 범위까지만)
 # =========================================================
@@ -431,7 +473,19 @@ def set_rate(ws, row: int, rate_col: int, new_rate: float, changed_rows: set[int
 
 
 # =========================================================
-# 6) 구상금액 수식(데이터 행만)
+# 6) 발생금액 수식(데이터 행만)
+# =========================================================
+def set_total_cost_formula_rows(ws, data_rows: List[int], col_130_percent: int, labor_cost_col: int, outsource_labor_cost_col: int, total_cost_col: int) -> None:
+    """발생금액 = 130% + 공임대 + 외주공임"""
+    for r in data_rows:
+        addr_130 = ws.cell(row=r, column=col_130_percent).coordinate
+        addr_labor = ws.cell(row=r, column=labor_cost_col).coordinate
+        addr_outsource = ws.cell(row=r, column=outsource_labor_cost_col).coordinate
+        set_cell_value_safe(ws, r, total_cost_col, f"={addr_130}+{addr_labor}+{addr_outsource}")
+
+
+# =========================================================
+# 7) 구상금액 수식(데이터 행만)
 # =========================================================
 def set_chargeback_formula_rows(ws, data_rows: List[int], occ_col: int, rate_col: int, chb_col: int) -> None:
     for r in data_rows:
@@ -752,6 +806,12 @@ def preprocess_with_rules(
         # 발생금액 - "발생" 제외
         occ_col = find_col_by_keywords_ws(ws, header_row, ["total cost", "발생금액"], mode="any")
         chb_col = find_chargeback_col(ws, header_row)
+        
+        # 공임비 및 발생금액 관련 컬럼 찾기
+        col_130_percent = find_130_percent_col(ws, header_row)
+        labor_cost_col = find_labor_cost_col(ws, header_row)
+        outsource_labor_cost_col = find_outsource_labor_cost_col(ws, header_row)
+        total_cost_col = occ_col  # occ_col과 동일한 컬럼
     except Exception as e:
         raise AppError(f"필수 컬럼을 찾을 수 없습니다: {e}")
     
@@ -787,7 +847,16 @@ def preprocess_with_rules(
     # 룰 사용 추적용 딕셔너리 초기화
     rule_used = {rule.get("rule_id"): False for rule in active_rules}
     
-    # ===== 7단계: 각 행 처리 =====
+    # ===== 7단계: 발생금액 및 구상금액 수식 적용 =====
+    # 발생금액 수식: 130% + 공임대 + 외주공임
+    if total_cost_col and col_130_percent and labor_cost_col and outsource_labor_cost_col:
+        set_total_cost_formula_rows(ws, data_rows, col_130_percent, labor_cost_col, outsource_labor_cost_col, total_cost_col)
+    
+    # 구상금액 수식: 발생금액 × 구상율 (나중에 후처리에서도 적용되지만, 여기서도 미리 적용)
+    if chb_col and total_cost_col and rate_col:
+        set_chargeback_formula_rows(ws, data_rows, total_cost_col, rate_col, chb_col)
+    
+    # ===== 8단계: 각 행 처리 =====
     # 행별 warranty 오버라이드 저장 {row_num: (mileage, years)}
     row_warranty_overrides: Dict[int, Tuple[Optional[int], Optional[int]]] = {}
     # 행별 룰 적용 여부 추적
@@ -875,6 +944,39 @@ def preprocess_with_rules(
                     if rule_liability_ratio is not None:
                         set_rate(ws, row_num, rate_col, rule_liability_ratio, set())
                         result.liability_ratio_rules_applied += 1
+                    
+                    # 공임비 상한 룰
+                    amount_cap_type = rule.get("amount_cap_type")
+                    amount_cap_value = rule.get("amount_cap_value")
+                    if amount_cap_type and amount_cap_type != "NONE" and amount_cap_value is not None:
+                        # 공임비 컬럼 선택
+                        target_col = None
+                        if amount_cap_type == "LABOR" and labor_cost_col:
+                            target_col = labor_cost_col
+                        elif amount_cap_type == "OUTSOURCE_LABOR" and outsource_labor_cost_col:
+                            target_col = outsource_labor_cost_col
+                        elif amount_cap_type == "BOTH_LABOR" and total_cost_col:
+                            target_col = total_cost_col
+                        
+                        if target_col:
+                            try:
+                                # 공임비 값 읽기
+                                labor_value = ws.cell(row=row_num, column=target_col).value
+                                if labor_value is not None:
+                                    try:
+                                        labor_amount = float(labor_value)
+                                        # 상한 초과 체크
+                                        if labor_amount > amount_cap_value:
+                                            # 상한으로 제한
+                                            set_cell_value_safe(ws, row_num, target_col, amount_cap_value)
+                                            # 마킹 (노란색)
+                                            set_cell_fill_safe(ws, row_num, target_col, FILL_HIGHLIGHT)
+                                            result.amount_cap_exceeded_rows += 1
+                                            result.amount_cap_rules_applied += 1
+                                    except (ValueError, TypeError):
+                                        pass  # 숫자 변환 실패 시 무시
+                            except Exception:
+                                pass  # 셀 읽기 실패 시 무시
             
             # 룰이 적용되었거나 기본 구상률이 적용된 경우 정상 처리로 카운트
             row_rule_applied[row_num] = rule_applied
@@ -1085,6 +1187,8 @@ def preprocess_inplace(
             total.warranty_mileage_rules_applied += r.warranty_mileage_rules_applied
             total.warranty_period_rules_applied += r.warranty_period_rules_applied
             total.liability_ratio_rules_applied += r.liability_ratio_rules_applied
+            total.amount_cap_rules_applied += r.amount_cap_rules_applied
+            total.amount_cap_exceeded_rows += r.amount_cap_exceeded_rows
             total.mileage_exceeded_rows += r.mileage_exceeded_rows
             total.period_exceeded_rows += r.period_exceeded_rows
             total.both_exceeded_rows += r.both_exceeded_rows
