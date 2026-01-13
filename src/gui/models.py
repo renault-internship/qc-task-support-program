@@ -668,11 +668,46 @@ class ExcelSheetModel(QAbstractTableModel):
             except Exception:
                 return v
 
-        # 4) 아주 흔한 패턴: =T4*(U4/100)
+        # 4) 덧셈/뺄셈 수식: =Q4+R4+S4 또는 =A1-B1
+        try:
+            return self._eval_simple_add_sub(s)
+        except Exception:
+            pass
+        
+        # 5) 아주 흔한 패턴: =T4*(U4/100)
         try:
             return self._eval_simple_mul_div(s)
         except Exception:
             return v
+
+    def _eval_simple_add_sub(self, formula: str) -> float:
+        """
+        지원 범위: =A1+B2+C3 또는 =A1-B2 같은 단순 덧셈/뺄셈
+        """
+        import re
+        
+        # =Q4+R4+S4 같은 패턴 매칭
+        # 셀 주소와 + 또는 - 연산자 추출
+        pattern = r"=\s*([A-Z]{1,3}\d+)(\s*([+\-])\s*([A-Z]{1,3}\d+))+"
+        m = re.fullmatch(pattern, formula, re.IGNORECASE)
+        if not m:
+            raise ValueError("not supported")
+        
+        # 첫 번째 셀 주소
+        first_addr = m.group(1).upper()
+        result = self._read_number(first_addr)
+        
+        # 나머지 셀 주소들과 연산자 찾기
+        parts = re.findall(r"([+\-])\s*([A-Z]{1,3}\d+)", formula, re.IGNORECASE)
+        for op, addr in parts:
+            addr = addr.upper()
+            value = self._read_number(addr)
+            if op == '+':
+                result += value
+            else:  # op == '-'
+                result -= value
+        
+        return result
 
     def _eval_simple_mul_div(self, formula: str) -> float:
         """
@@ -724,6 +759,15 @@ class ExcelSheetModel(QAbstractTableModel):
         if isinstance(vv, (int, float)):
             return float(vv)
         if isinstance(vv, str):
+            # 수식이면 계산 시도
+            if vv.strip().startswith("="):
+                try:
+                    v_display = self._display_value(vv, row, col)
+                    if isinstance(v_display, (int, float)):
+                        return float(v_display)
+                except Exception:
+                    pass
+            # 문자열 숫자 처리
             t = vv.strip().replace(",", "")
             try:
                 return float(t)
