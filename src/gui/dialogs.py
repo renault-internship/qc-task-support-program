@@ -300,6 +300,20 @@ class AddRuleDialog(QDialog):
         valid_to_layout.addWidget(self.valid_to_edit)
         section3_layout.addWidget(valid_to_widget)
         
+        # Note (노트)
+        note_widget = QWidget()
+        note_layout = QVBoxLayout(note_widget)
+        note_layout.setContentsMargins(0, 0, 0, 0)
+        note_label = QLabel("노트:")
+        note_label.setStyleSheet("font-size: 8pt;")
+        note_layout.addWidget(note_label)
+        self.note_edit = QTextEdit()
+        self.note_edit.setPlaceholderText("노트를 입력하세요 (선택사항)")
+        self.note_edit.setMinimumHeight(200)
+        self.note_edit.setMaximumHeight(250)
+        note_layout.addWidget(self.note_edit)
+        section3_layout.addWidget(note_widget)
+        
         # 하단 여백 추가
         section3_layout.addStretch()
         
@@ -392,6 +406,10 @@ class AddRuleDialog(QDialog):
         
         if "valid_to" in rule_data:
             self.valid_to_edit.setText(str(rule_data["valid_to"]) if rule_data["valid_to"] else "")
+        
+        if "note" in rule_data:
+            note_value = rule_data.get("note")
+            self.note_edit.setPlainText(str(note_value) if note_value else "")
     
     def _on_rule_type_changed(self):
         """규칙 타입 체크박스 변경 시 다른 옵션 비활성화 및 활성화"""
@@ -511,6 +529,7 @@ class AddRuleDialog(QDialog):
             "amount_cap_value": amount_cap_value,
             "valid_from": self.valid_from_edit.text().strip() or None,
             "valid_to": self.valid_to_edit.text().strip() or None,
+            "note": self.note_edit.toPlainText().strip() or "",
         }
 
 

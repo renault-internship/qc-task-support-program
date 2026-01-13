@@ -300,6 +300,7 @@ class RuleManagementWidget(QWidget):
             "amount_cap_value": "상한 금액",
             "valid_from": "적용 시작일",
             "valid_to": "적용 종료일",
+            "note": "노트",
             "created_at": "생성일시",
             "updated_at": "수정일시",
         }
@@ -315,7 +316,7 @@ class RuleManagementWidget(QWidget):
                        "liability_ratio", "amount_cap_type", "amount_cap_value",
                        "warranty_mileage_override", "warranty_period_override",
                        "valid_from", "valid_to", "engine_form",
-                       "created_at", "updated_at"]
+                       "created_at", "updated_at", "note"]
         
         # 순서가 정해진 컬럼 먼저, 나머지는 알파벳 순
         ordered_columns = []
@@ -419,6 +420,7 @@ class RuleManagementWidget(QWidget):
                     amount_cap_value=data.get("amount_cap_value"),
                     valid_from=data.get("valid_from"),
                     valid_to=data.get("valid_to"),
+                    note=data.get("note", ""),
                 )
                 
                 QMessageBox.information(self, "완료", f"규칙이 추가되었습니다. (ID: {rule_id})")
@@ -472,6 +474,7 @@ class RuleManagementWidget(QWidget):
                     amount_cap_value=data.get("amount_cap_value"),
                     valid_from=data.get("valid_from"),
                     valid_to=data.get("valid_to"),
+                    note=data.get("note"),
                 )
                 
                 if success:
