@@ -350,7 +350,7 @@ class AddRuleDialog(QDialog):
             self.engine_form_edit.setText(str(rule_data["engine_form"]))
         
         # 규칙 타입 체크박스 설정 (데이터 기반으로 어떤 옵션이 선택되었는지 판단)
-        has_liability = "liability_ratio" in rule_data and rule_data.get("liability_ratio") is not None and rule_data.get("liability_ratio") > 0.0
+        has_liability = "liability_ratio" in rule_data and rule_data.get("liability_ratio") is not None and rule_data.get("liability_ratio") >= 0.0
         has_amount_cap = "amount_cap_type" in rule_data and rule_data.get("amount_cap_type") and rule_data.get("amount_cap_type") != "NONE"
         has_warranty = ("warranty_mileage_override" in rule_data and rule_data.get("warranty_mileage_override")) or \
                       ("warranty_period_override" in rule_data and rule_data.get("warranty_period_override"))
@@ -374,7 +374,8 @@ class AddRuleDialog(QDialog):
             # liability_ratio가 None일 수 있음
             liability_ratio = rule_data.get("liability_ratio")
             if liability_ratio is not None:
-                self.liability_ratio_spin.setValue(float(liability_ratio))
+                # DB 값(0~1 범위)을 퍼센티지(0~100%)로 변환
+                self.liability_ratio_spin.setValue(float(liability_ratio) * 100)
             else:
                 self.liability_ratio_spin.setValue(0.0)  # None이면 0으로 표시 (SpecialValueText)
         
@@ -482,8 +483,8 @@ class AddRuleDialog(QDialog):
         warranty_period = None
         
         if self.liability_checkbox.isChecked():
-            # 구상률 선택
-            liability_ratio = self.liability_ratio_spin.value() if self.liability_ratio_spin.value() > 0.0 else None
+            # 구상률 선택 (0도 허용)
+            liability_ratio = self.liability_ratio_spin.value() / 100.0  # 퍼센티지를 0~1 범위로 변환
         elif self.amount_cap_checkbox.isChecked():
             # 공임비상한 선택
             amount_cap_type = self.amount_cap_combo.currentText()

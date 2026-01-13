@@ -526,8 +526,8 @@ def check_rule_match(rule: Dict[str, Any], row_data: Dict[str, Any], current_dat
             # 부품번호 매칭 시도
             if row_part_no and rule_part_no in row_part_no:
                 pass  # 매칭 성공
-            # 부품번호가 없거나 매칭 실패 시 부품명으로 시도
-            elif row_part_name and rule_part_name in row_part_name:
+            # 부품번호가 없거나 매칭 실패 시 부품명으로 시도 (대소문자 무시)
+            elif row_part_name and rule_part_name.lower() in row_part_name.lower():
                 pass  # 매칭 성공
             else:
                 return False
@@ -537,9 +537,9 @@ def check_rule_match(rule: Dict[str, Any], row_data: Dict[str, Any], current_dat
             if not row_part_no or rule_part_no not in row_part_no:
                 return False
         
-        # 부품명만 설정된 경우
+        # 부품명만 설정된 경우 (대소문자 무시)
         elif rule_part_name != "ALL":
-            if not row_part_name or rule_part_name not in row_part_name:
+            if not row_part_name or rule_part_name.lower() not in row_part_name.lower():
                 return False
     
     # 6. 엔진 형태 체크
