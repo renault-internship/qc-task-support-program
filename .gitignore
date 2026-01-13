@@ -47,3 +47,8 @@ Thumbs.db
 
 dist/
 dist_v*
+# migration temp files
+migrate.sql
+tables_local.txt
+tables_remote.txt
+tables_to_restore.txt
