@@ -246,6 +246,48 @@ def _mark_preprocessed(wb: Workbook) -> None:
     ws[META_DONE_CELL].value = "1"
     ws[META_TS_CELL].value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+# =========================================================
+# 0-1) 시트별 국내 해외 구분후 처리
+# =========================================================
+
+def _detect_repair_region_by_sheetname(ws) -> str | None:
+    """
+    시트 이름에 '국내' or '해외'가 포함되면 해당 region 반환.
+    아니면 None.
+    """
+    name = (ws.title or "").strip().lower()
+    if "국내" in name:
+        return "DOMESTIC"
+    if "해외" in name:
+        return "OVERSEAS"
+    return None
+
+
+def _infer_region_with_opposite(wb, idx: int) -> str | None:
+    """
+    1) 내 시트명에 국내/해외 있으면 그걸로 확정
+    2) 없으면, 워크북 내 다른 시트들 중 국내/해외가 확정된 게 있으면 '반대'로 추정
+    3) 둘 다 못하면 None
+    """
+    ws = wb.worksheets[idx]
+
+    mine = _detect_repair_region_by_sheetname(ws)
+    if mine:
+        return mine
+
+    other_known = None
+    for j, other_ws in enumerate(wb.worksheets):
+        if j == idx:
+            continue
+        r = _detect_repair_region_by_sheetname(other_ws)
+        if r:
+            other_known = r
+            break
+
+    if not other_known:
+        return None
+
+    return "OVERSEAS" if other_known == "DOMESTIC" else "DOMESTIC"
 
 # =========================================================
 # 1) 병합셀(MergedCell) 안전 처리
@@ -934,6 +976,58 @@ def process_file(in_path: str, out_path: str, cfg: CompanyConfig) -> None:
     wb.save(out_path)
 
 
+def _infer_region_from_title(title: str) -> Optional[str]:
+    """
+    시트명으로 DOMESTIC/OVERSEAS 판단
+    - '국내' 포함 => DOMESTIC
+    - '해외' 포함 => OVERSEAS
+    """
+    if not title:
+        return None
+    t = str(title).strip().lower()
+    if "국내" in t:
+        return "DOMESTIC"
+    if "해외" in t:
+        return "OVERSEAS"
+    return None
+
+
+def _infer_region_with_opposite(wb: Workbook, idx: int, default_region: str = "") -> Optional[str]:
+    """
+    1) 현재 시트명으로 우선 판별
+    2) 없으면 다른 시트들 중 '국내/해외'가 명확한 걸 찾아서 반대로 추정
+       - 다른 시트가 DOMESTIC면 현재는 OVERSEAS로
+       - 다른 시트가 OVERSEAS면 현재는 DOMESTIC로
+    3) 그래도 없으면 default_region(기존 UI에서 넘어온 값) 사용
+    """
+    ws = wb.worksheets[idx]
+    direct = _infer_region_from_title(ws.title)
+    if direct:
+        return direct
+
+    other_regions = []
+    for j, other_ws in enumerate(wb.worksheets):
+        if j == idx:
+            continue
+        if other_ws.title == META_SHEET_NAME:
+            continue
+        r = _infer_region_from_title(other_ws.title)
+        if r:
+            other_regions.append(r)
+
+    # 다른 시트에서 하나라도 잡히면 반대로 추정
+    if "DOMESTIC" in other_regions and "OVERSEAS" not in other_regions:
+        return "OVERSEAS"
+    if "OVERSEAS" in other_regions and "DOMESTIC" not in other_regions:
+        return "DOMESTIC"
+
+    # 둘 다 섞여있거나 아예 없으면 default_region 사용(없으면 None)
+    default_region = (default_region or "").strip().upper()
+    if default_region in ("DOMESTIC", "OVERSEAS"):
+        return default_region
+
+    return None
+
 # =========================================================
 # 14) UI 엔트리 - 룰 기반 전처리
 # =========================================================
@@ -942,43 +1036,71 @@ def preprocess_inplace(
     company_code: str,
     company_name: str,
     rule_table_name: str,
-    repair_region: str
+    repair_region: str,  # ✅ UI에서 넘어오지만, 시트별 판별로 override 할거라서 "기본값" 취급
 ) -> PreprocessResult:
     """
-    GUI 전처리 버튼 엔트리 (룰 기반).
-    
-    Args:
-        wb: 워크북
-        company_code: 회사 코드
-        company_name: 회사명
-        rule_table_name: 룰 테이블 이름
-        repair_region: 수리 지역 ("DOMESTIC" 또는 "OVERSEAS")
-    
-    Returns:
-        PreprocessResult: 전처리 결과 통계
+    GUI 전처리 버튼 엔트리 (룰 기반) - 워크북 전체 시트 처리
+    - _PREPROCESS_META는 스킵
+    - 시트명에 '국내'/'해외' 포함이면 그걸로 repair_region 결정
+    - 둘 다 없으면 반대 시트명으로 추정
+    - 전처리 마킹은 마지막에 1번만
     """
     try:
-        # ✅ 전처리 1회만 허용
         if _is_already_preprocessed(wb):
             raise AppError("이미 전처리된 파일입니다. (전처리는 1회만 가능합니다)")
-        
-        # 룰 기반 전처리 실행
-        result = preprocess_with_rules(
-            wb=wb,
-            rule_table_name=rule_table_name,
-            repair_region=repair_region,
-            company_code=company_code,
-            company_name=company_name,
-            sheet_index=0,
-            header_row=3,
-            data_start_row=4,
-        )
-        
-        # ✅ 전처리 완료 마킹
+
+        total = PreprocessResult()
+        total.repair_region = repair_region
+        total.company_code = company_code
+        total.company_name = company_name
+        total.rule_table_name = rule_table_name
+        total.process_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for idx, ws in enumerate(wb.worksheets):
+            if ws.title == META_SHEET_NAME:
+                continue
+
+            region = _infer_region_with_opposite(wb, idx, default_region=repair_region)
+            if not region:
+                total.add_remark(f"[{ws.title}] 스킵: 시트명에 국내/해외 없음 + 반대 추정 불가")
+                continue
+
+            r = preprocess_with_rules(
+                wb=wb,
+                rule_table_name=rule_table_name,
+                repair_region=region,
+                company_code=company_code,
+                company_name=company_name,
+                sheet_index=idx,
+                header_row=3,
+                data_start_row=4,
+            )
+
+            # ✅ 합산(최소 필드만)
+            total.total_rows += r.total_rows
+            total.success_rows += r.success_rows
+            total.warning_rows += r.warning_rows
+            total.error_rows += r.error_rows
+            total.common_liability_applied += r.common_liability_applied
+            total.warranty_mileage_rules_applied += r.warranty_mileage_rules_applied
+            total.warranty_period_rules_applied += r.warranty_period_rules_applied
+            total.liability_ratio_rules_applied += r.liability_ratio_rules_applied
+            total.mileage_exceeded_rows += r.mileage_exceeded_rows
+            total.period_exceeded_rows += r.period_exceeded_rows
+            total.both_exceeded_rows += r.both_exceeded_rows
+            total.warranty_highlighted_rows += r.warranty_highlighted_rows
+
+            total.warnings.extend(r.warnings)
+            total.remarks.extend([f"[{ws.title}] {m}" for m in r.remarks])
+
+            if total.default_mileage_threshold == 0:
+                total.default_mileage_threshold = r.default_mileage_threshold
+            if total.default_warranty_years == 0:
+                total.default_warranty_years = r.default_warranty_years
+
         _mark_preprocessed(wb)
-        
-        return result
-        
+        return total
+
     except AppError:
         raise
     except Exception as e:

@@ -723,12 +723,16 @@ class MainPageWidget(QWidget):
 
         if not path:
             return
-
         try:
+            print("EXPORT wb sheets:", wb_to_save.sheetnames, flush=True)
+            print("EXPORT wb sheet count:", len(wb_to_save.sheetnames), flush=True)
+            print("EXPORT active:", wb_to_save.active.title if wb_to_save.active else None, flush=True)
+
             save_workbook_safe(wb_to_save, Path(path))
             QMessageBox.information(self, "완료", "저장했습니다.")
         except AppError as e:
             QMessageBox.critical(self, "오류", str(e))
+
     
     # ================= 테이블 헤더 메뉴 =================
     def _on_header_context_menu(self, pos):
