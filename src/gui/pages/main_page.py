@@ -25,6 +25,7 @@ from src.gui.excel_filter import ExcelFilterProxyModel, ColumnFilterDialog, Colu
 from src.gui.dialogs import AddRuleDialog
 from PySide6.QtGui import QColor
 
+import re
 
 class WorkerThread(QThread):
     """긴 작업을 처리할 백그라운드 쓰레드"""
@@ -455,16 +456,28 @@ class MainPageWidget(QWidget):
     def on_search_changed(self, text: str):
         if not self.proxy:
             return
-        if not text:
+
+        s = (text or "").strip()
+        if not s:
             self.proxy.setFilterRegularExpression(QRegularExpression(""))
-        else:
-            rx = QRegularExpression(
-                QRegularExpression.escape(text),
-                QRegularExpression.CaseInsensitiveOption
-            )
-            self.proxy.setFilterRegularExpression(rx)
-        
-        # ✅ 검색 필터 변경 후 병합 셀 다시 적용
+            self._apply_merged_cells_only()
+            return
+
+        # & 를 OR로 사용
+        # 예: "크랙&크렉&균열"
+        parts = [p.strip() for p in s.split("&") if p.strip()]
+
+        if not parts:
+            self.proxy.setFilterRegularExpression(QRegularExpression(""))
+            self._apply_merged_cells_only()
+            return
+
+        escaped = [QRegularExpression.escape(p) for p in parts]
+        pattern = "(" + "|".join(escaped) + ")"
+
+        rx = QRegularExpression(pattern, QRegularExpression.CaseInsensitiveOption)
+        self.proxy.setFilterRegularExpression(rx)
+
         self._apply_merged_cells_only()
 
     # ================= 편집 모드 =================
@@ -974,3 +987,13 @@ class MainPageWidget(QWidget):
             row_span = max_row - min_row + 1
             col_span = max_col - min_col + 1
             table.setSpan(row, col, row_span, col_span)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+
+        self.load_companies()
+
+        text = self.control_panel.get_company_edit().text().strip()
+        key = self._extract_company_name_or_code(text)
+        if key:
+            self._on_company_changed(key)

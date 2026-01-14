@@ -352,7 +352,7 @@ class VehicleProjectMapDialog(QDialog):
         super().__init__(parent)
         self.is_edit_mode = vehicle_prefix is not None
 
-        self.setWindowTitle("차계 설정 수정" if self.is_edit_mode else "차계 설정정 추가")
+        self.setWindowTitle("차계 설정 수정" if self.is_edit_mode else "차계 설정 추가")
         self.setFixedSize(420, 160)
 
         layout = QFormLayout()
