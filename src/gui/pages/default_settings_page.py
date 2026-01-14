@@ -403,7 +403,7 @@ class VehicleProjectMapSettingsWidget(QWidget):
         title.setStyleSheet("font-size: 12pt; font-weight: bold;")
         layout.addWidget(title)
 
-        desc = QLabel("차계 별 프로젝트 코드 매칭을을 관리합니다. ")
+        desc = QLabel("차계별 프로젝트 코드 매칭을 관리합니다. ")
         desc.setStyleSheet("color: #666;")
         layout.addWidget(desc)
 
